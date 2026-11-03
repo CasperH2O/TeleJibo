@@ -1,0 +1,16 @@
+[
+  {
+    "name": "make_4.3-4.1build2_amd64.deb",
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/m/make-dfsg/make_4.3-4.1build2_amd64.deb",
+    "sha256": "1fe6a815b56c7b6e9ce4086a363f09444bbd0a0d30e230c453d0b78e44b57a99",
+    "kind": "deb",
+    "package": "make",
+    "version": "4.3-4.1build2"
+  },
+  {
+    "name": "gcc-linaro-arm.tar.xz",
+    "url": "https://developer.arm.com/-/cdn-downloads/permalink/legacy-linaro-gnu-toolchains/4.9-2017.01/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabihf.tar.xz",
+    "sha256": "22914118fd963f953824b58107015c6953b5bbdccbdcf25ad9fd9a2f9f11ac07",
+    "kind": "compiler"
+  }
+]

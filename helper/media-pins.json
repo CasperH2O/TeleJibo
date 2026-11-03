@@ -1,0 +1,92 @@
+{
+  "sources": [
+    {
+      "name": "tgcalls",
+      "repository": "TelegramMessenger/tgcalls",
+      "commit": "1c236c09f8d8569fead14bd68000618a52051225",
+      "url": "https://codeload.github.com/TelegramMessenger/tgcalls/tar.gz/1c236c09f8d8569fead14bd68000618a52051225",
+      "archive": "tgcalls-media.tar.gz",
+      "sha256": "f1bf0ee434ebba6bc08561083540851303f094279f0a7ed707305be8c2eed83d"
+    },
+    {
+      "name": "tg_owt",
+      "repository": "desktop-app/tg_owt",
+      "commit": "020feec5c040fdae2cf752c2c2be62ddde7c236d",
+      "url": "https://codeload.github.com/desktop-app/tg_owt/tar.gz/020feec5c040fdae2cf752c2c2be62ddde7c236d",
+      "archive": "tg_owt-media.tar.gz",
+      "sha256": "4e21594f847f9fbbe24bbae9601bf4a58dbd33fdd77831f37c2922955ebb28e7"
+    },
+    {
+      "name": "abseil",
+      "repository": "abseil/abseil-cpp",
+      "commit": "d7aaad83b488fd62bd51c81ecf16cd938532cc0a",
+      "url": "https://codeload.github.com/abseil/abseil-cpp/tar.gz/d7aaad83b488fd62bd51c81ecf16cd938532cc0a",
+      "archive": "abseil-media.tar.gz",
+      "sha256": "3a1f642ea21f45b220a01708d06b46042a3b750f31772b52371d6268f02d5bbc"
+    },
+    {
+      "name": "crc32c",
+      "repository": "google/crc32c",
+      "commit": "21fc8ef30415a635e7351ffa0e5d5367943d4a94",
+      "url": "https://codeload.github.com/google/crc32c/tar.gz/21fc8ef30415a635e7351ffa0e5d5367943d4a94",
+      "archive": "crc32c-media.tar.gz",
+      "sha256": "97d404992dcab9ab6be56067a37889b0cba1ea6cabcc2bc3feeb0131ee35a340"
+    },
+    {
+      "name": "libsrtp",
+      "repository": "cisco/libsrtp",
+      "commit": "a566a9cfcd619e8327784aa7cff4a1276dc1e895",
+      "url": "https://codeload.github.com/cisco/libsrtp/tar.gz/a566a9cfcd619e8327784aa7cff4a1276dc1e895",
+      "archive": "libsrtp-media.tar.gz",
+      "sha256": "e9ea6288246f3cb21954393a19fda09f4dd252147967a30bb8824c2168620c61"
+    },
+    {
+      "name": "opus",
+      "repository": "xiph/opus",
+      "commit": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
+      "url": "https://codeload.github.com/xiph/opus/tar.gz/ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
+      "archive": "opus-media.tar.gz",
+      "sha256": "18e9d9e26565e279753aafb6823a482ef85ea9fddbfdcdbff8fd095b12dd96b6"
+    },
+    {
+      "name": "vpx",
+      "repository": "webmproject/libvpx",
+      "commit": "9f9b7e9ba2eb9d01640a9e69a3d655866265cf7f",
+      "url": "https://codeload.github.com/webmproject/libvpx/tar.gz/9f9b7e9ba2eb9d01640a9e69a3d655866265cf7f",
+      "archive": "vpx-media.tar.gz",
+      "sha256": "6595164e6aaee0995ba5177c2d856e4ab82ec353c2e2b14600286d20848d1208"
+    },
+    {
+      "name": "openh264",
+      "repository": "cisco/openh264",
+      "commit": "652bdb7719f30b52b08e506645a7322ff1b2cc6f",
+      "url": "https://codeload.github.com/cisco/openh264/tar.gz/652bdb7719f30b52b08e506645a7322ff1b2cc6f",
+      "archive": "openh264-media.tar.gz",
+      "sha256": "7a060916a9fcb63ba51d83a4f2388660c0b58797be547c4fa5c52e8d65660a85"
+    },
+    {
+      "name": "jpeg",
+      "repository": "libjpeg-turbo/libjpeg-turbo",
+      "commit": "20ade4dea9589515a69793e447a6c6220b464535",
+      "url": "https://codeload.github.com/libjpeg-turbo/libjpeg-turbo/tar.gz/20ade4dea9589515a69793e447a6c6220b464535",
+      "archive": "jpeg-media.tar.gz",
+      "sha256": "b439b373685be152f105f9fdd109f62a68aff7d098d670e79186024acb6379eb"
+    },
+    {
+      "name": "ffmpeg",
+      "repository": "FFmpeg/FFmpeg",
+      "commit": "db69d06eeeab4f46da15030a80d539efb4503ca8",
+      "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/db69d06eeeab4f46da15030a80d539efb4503ca8",
+      "archive": "ffmpeg-media.tar.gz",
+      "sha256": "173ba614d8636491106cba08d79db469b5dee4b479388bc4fbcead8ca1fb79b1"
+    },
+    {
+      "name": "libyuv",
+      "repository": "chromiumsrc/libyuv",
+      "commit": "04821d1e7d60845525e8db55c7bcd41ef5be9406",
+      "url": "https://gitlab.com/chromiumsrc/libyuv/-/archive/04821d1e7d60845525e8db55c7bcd41ef5be9406/libyuv-04821d1e7d60845525e8db55c7bcd41ef5be9406.tar.gz",
+      "archive": "libyuv.tar.gz",
+      "sha256": "eadc1c7276135320f42a22599f23a2f55419e1d90a3c6a4c58cd1586f7b83bff"
+    }
+  ]
+}

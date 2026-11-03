@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Render TeleJibo's artwork in the classic Jibo icon style, with no dependencies.
+
+Classic glyphs are flat white with a little dark-navy detail and a soft long shadow cast
+toward the lower right (jibo-ui-classic tokens, iconography.style). Writes:
+
+  icon.png                              330x330 store and main-menu glyph (BEacon tints the tile)
+  banner.png                            1000x800 store banner: the glyph on its menu tile
+  telejibo/resources/icons/video.png    265x265 action-button icon (camera toggle)
+  telejibo/resources/icons/settings.png 265x265 action-button icon (settings)
+
+PNGs are 8-bit RGBA with only IHDR/IDAT/IEND chunks, and deterministic: the same bytes on
+every run. Shapes are 24-unit outlines (Feather-like proportions), supersampled 4x4.
+"""
+import math
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parents[1]
+SAMPLES = 4
+WHITE = (255, 255, 255)
+NAVY = (0x1A, 0x25, 0x63)
+TILE = ((0x37, 0x65, 0xAB), (0x1A, 0x25, 0x63))  # manifest buttonColor: highlight, shadow
+
+
+def rounded_rect(x, y, width, height, radius):
+    def inside(px, py):
+        if not (x <= px <= x + width and y <= py <= y + height):
+            return False
+        cx = min(max(px, x + radius), x + width - radius)
+        cy = min(max(py, y + radius), y + height - radius)
+        return (px - cx) ** 2 + (py - cy) ** 2 <= radius ** 2
+    return inside
+
+
+def disc(cx, cy, radius):
+    return lambda px, py: (px - cx) ** 2 + (py - cy) ** 2 <= radius ** 2
+
+
+def convex(points):
+    def inside(px, py):
+        sign = 0
+        for (ax, ay), (bx, by) in zip(points, points[1:] + points[:1]):
+            cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+            if cross:
+                if sign and (cross > 0) != (sign > 0):
+                    return False
+                sign = cross
+        return True
+    return inside
+
+
+def gear(cx, cy, body, tip, hole, teeth, tooth_width):
+    def inside(px, py):
+        dx, dy = px - cx, py - cy
+        r = math.hypot(dx, dy)
+        if r <= hole:
+            return False
+        if r <= body:
+            return True
+        if r > tip:
+            return False
+        angle = math.atan2(dy, dx)
+        step = 2 * math.pi / teeth
+        nearest = round(angle / step) * step
+        offset = abs(dx * math.sin(nearest) - dy * math.cos(nearest))  # distance from the tooth's axis
+        return offset <= tooth_width / 2
+    return inside
+
+
+# Glyphs: a list of (shape, colour); later shapes paint over earlier ones.
+def camera():
+    return [(rounded_rect(1.5, 5.5, 15, 13, 2.6), WHITE),
+            (convex([(16, 10.4), (22.8, 6.6), (22.8, 17.4), (16, 13.6)]), WHITE),
+            # Jibo's eye in the camera body: the navy detail stock glyphs carry.
+            (disc(9, 12, 2.9), NAVY)]
+
+
+def cog():
+    return [(gear(12, 12, 7.2, 10.6, 3.3, 8, 3.4), WHITE)]
+
+
+def raster(width, height, glyph, scale, origin):
+    """Coverage and colour per pixel for glyph drawn at `scale` px/unit, unit (0,0) at `origin`."""
+    alpha = [[0.0] * width for _ in range(height)]
+    colour = [[WHITE] * width for _ in range(height)]
+    ox, oy = origin
+    span = 24 * scale
+    x0, x1 = max(0, int(ox) - 2), min(width, int(ox + span) + 3)
+    y0, y1 = max(0, int(oy) - 2), min(height, int(oy + span) + 3)
+    offsets = [(i + 0.5) / SAMPLES for i in range(SAMPLES)]
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            hits, last = 0, WHITE
+            for sy in offsets:
+                for sx in offsets:
+                    ux, uy = (x + sx - ox) / scale, (y + sy - oy) / scale
+                    painted = None
+                    for shape, fill in glyph:
+                        if shape(ux, uy):
+                            painted = fill
+                    if painted is not None:
+                        hits += 1
+                        if painted != WHITE:
+                            last = painted
+            if hits:
+                alpha[y][x] = hits / SAMPLES ** 2
+                colour[y][x] = last
+    return alpha, colour
+
+
+def long_shadow(alpha, length, strength):
+    """Shadow cast down-right at 45 degrees, fading linearly over `length` px."""
+    height, width = len(alpha), len(alpha[0])
+    shadow = [[0.0] * width for _ in range(height)]
+    fade = strength / length
+    for y in range(1, height):
+        row, above, cast = shadow[y], shadow[y - 1], alpha[y - 1]
+        for x in range(1, width):
+            row[x] = max(cast[x - 1] * strength, above[x - 1] - fade, 0.0)
+    return shadow
+
+
+def icon(width, height, glyph, box, centre, shadow_length, shadow_strength=0.18):
+    scale = box / 24
+    alpha, colour = raster(width, height, glyph, scale, (centre[0] - box / 2, centre[1] - box / 2))
+    shadow = long_shadow(alpha, shadow_length, shadow_strength)
+    pixels = []
+    for y in range(height):
+        for x in range(width):
+            a, s = alpha[y][x], shadow[y][x] * (1 - alpha[y][x])
+            total = a + s
+            if total <= 0:
+                pixels.append((0, 0, 0, 0))
+                continue
+            r, g, b = colour[y][x]
+            pixels.append((round(r * a / total), round(g * a / total), round(b * a / total), round(255 * total)))
+    return pixels
+
+
+def tile(width, height, size, radius, pixels_of_glyph, glyph_size):
+    """The glyph composited on its menu tile's gradient, centred on black."""
+    left, top = (width - size) // 2, (height - size) // 2
+    inside = rounded_rect(left, top, size, size, radius)
+    gx, gy = (width - glyph_size) // 2, (height - glyph_size) // 2
+    out = []
+    for y in range(height):
+        for x in range(width):
+            hits = sum(inside(x + (i + 0.5) / SAMPLES, y + (j + 0.5) / SAMPLES) for i in range(SAMPLES) for j in range(SAMPLES))
+            cover = hits / SAMPLES ** 2
+            t = min(1.0, max(0.0, ((x - left) * 0.5 + (y - top)) / (size * 1.5)))
+            base = [TILE[0][k] + (TILE[1][k] - TILE[0][k]) * t for k in range(3)]
+            colour = [c * cover for c in base]
+            if gx <= x < gx + glyph_size and gy <= y < gy + glyph_size:
+                r, g, b, a = pixels_of_glyph[(y - gy) * glyph_size + (x - gx)]
+                a /= 255
+                colour = [colour[k] * (1 - a) + (r, g, b)[k] * a for k in range(3)]
+            out.append((round(colour[0]), round(colour[1]), round(colour[2]), 255))
+    return out
+
+
+def png(width, height, pixels):
+    rows = b''.join(b'\x00' + bytes(v for p in pixels[y * width:(y + 1) * width] for v in p) for y in range(height))
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xFFFFFFFF)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)) +
+            chunk(b'IDAT', zlib.compress(rows, 9)) + chunk(b'IEND', b''))
+
+
+def write(relative, width, height, pixels):
+    target = HERE / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(png(width, height, pixels))
+    print(relative, width, 'x', height)
+
+
+def main():
+    only = set(sys.argv[1:])
+    def wanted(name):
+        return not only or name in only
+    # App glyph: about 180 px wide, optical centre slightly above the middle (tokens: appIcon).
+    glyph = icon(330, 330, camera(), 196, (165, 160), 62)
+    if wanted('icon'):
+        write('icon.png', 330, 330, glyph)
+    if wanted('banner'):
+        write('banner.png', 1000, 800, tile(1000, 800, 420, 64, glyph, 330))
+    # Action icons: about 130 px drawing box on the stock 265 px canvas.
+    if wanted('video'):
+        write('telejibo/resources/icons/video.png', 265, 265, icon(265, 265, camera(), 138, (132, 132), 58))
+    if wanted('settings'):
+        write('telejibo/resources/icons/settings.png', 265, 265, icon(265, 265, cog(), 128, (132, 132), 60))
+
+
+if __name__ == '__main__':
+    main()

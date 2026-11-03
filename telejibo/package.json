@@ -1,0 +1,28 @@
+{
+  "name": "@be/telejibo",
+  "version": "0.1.0",
+  "description": "One-to-one Telegram video calls on Jibo (unofficial). Swipe down to exit.",
+  "main": "index.js",
+  "config": {
+    "standalone": true
+  },
+  "jibo": {
+    "main": "index.html",
+    "type": "asset-pack",
+    "launchRule": "launch.rule",
+    "prompt": "TeleJibo",
+    "display-name": "telejibo"
+  },
+  "scripts": {
+    "test": "node --test ../tests"
+  },
+  "engines": {
+    "node": ">=6.0"
+  },
+  "dependencies": {},
+  "syncDependencies": [
+    "jibo",
+    "@be/be-framework"
+  ],
+  "license": "GPL-3.0-or-later"
+}

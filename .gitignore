@@ -1,0 +1,16 @@
+# Builds, packages, private keys and runtime state never enter Git.
+/data/
+/dist/
+api.json
+*.private.json
+*.key
+*.pem
+*.log
+__pycache__/
+*.pyc
+/node_modules/
+/telejibo/bin/
+/telejibo/config/
+.vscode/
+.DS_Store
+/helper/data/

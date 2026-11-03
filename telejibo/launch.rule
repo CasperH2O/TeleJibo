@@ -1,0 +1,1 @@
+TopRule = $* ((telejibo) | (tele jibo) | (telly jibo) | (open telejibo) | (open tele jibo) | (video call) | (make a video call)) $* {skill='\@be/telejibo'};
