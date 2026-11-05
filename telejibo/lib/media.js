@@ -34,7 +34,9 @@ function toI420(rgba, width, height) {
 // The header lets the helper find the next whole frame after any partial one.
 function cameraFrame(i420, width, height) {
     var header = Buffer.alloc(12);
-    header.write('JICF', 0, 'ascii'); header.writeUInt32LE(width, 4); header.writeUInt32LE(height, 8);
+    // Plain byte stores: the simulator's Buffer has no write(string, offset, encoding).
+    header[0] = 0x4a; header[1] = 0x49; header[2] = 0x43; header[3] = 0x46;   // JICF
+    header.writeUInt32LE(width, 4); header.writeUInt32LE(height, 8);
     return Buffer.concat([header, i420]);
 }
 function fromI420(bytes, width, height, rgba) {
@@ -70,6 +72,17 @@ class RobotMedia extends events.EventEmitter {
         this.timer = null; this.pending = false; this.helper = null; this.canvas = null; this.listeners = [];
         this.callActive = false; this.cameraReady = false; this.cameraEnabled = false;
         this.began = 0; this.cameraNoted = {}; this.cameraTries = 0;
+        this.out = {sent: 0, skipped: 0, photos: 0, photoMs: 0}; this.outTimer = null;
+    }
+    // While the camera is on for a call, say every 3 s how many frames went to the helper: no
+    // line at all means the camera was never switched on, zero sent means no photo arrived or
+    // the helper's pipe is full.
+    outSummary() {
+        var o = this.out, stream = this.helper && this.helper.stdio && this.helper.stdio[5];
+        note('camera out: ' + o.sent + ' frames sent, ' + o.skipped + ' skipped (helper pipe full), ' + o.photos +
+            ' photos taken' + (o.photos ? ' (' + Math.round(o.photoMs / o.photos) + ' ms each)' : '') +
+            ', pipe queued ' + (stream ? queued(stream) : '?') + ' bytes, last problem: ' + (this.cameraLast || 'none'));
+        this.out = {sent: 0, skipped: 0, photos: 0, photoMs: 0};
     }
     since() { return Math.round(Date.now() - this.began) + 'ms'; }
     start(helper) {
@@ -152,7 +165,7 @@ class RobotMedia extends events.EventEmitter {
     cameraFrame() {
         // Probe once for readiness, then capture only while this call's camera is on.
         if (this.closed || this.pending || this.cameraReady && !this.sendingVideo()) return;
-        var self = this; this.pending = true; ++this.cameraTries;
+        var self = this, photoStart = Date.now(); this.pending = true; ++this.cameraTries;
         try {
             this.jibo.media.takePhoto({photoType:this.jibo.media.PhotoType.PREVIEW,flip:false,undistort:true},function (error,photo) {
                 if (error || self.closed) { if (error) self.cameraNote('takePhoto (the LPS media service)', error); self.pending = false; return; }
@@ -165,7 +178,11 @@ class RobotMedia extends events.EventEmitter {
                         if (self.closed) return;
                         var ctx = self.capture.getContext('2d'); ctx.drawImage(image,0,0,320,240);
                         var stream = self.helper.stdio[5];
-                        if (self.sendingVideo() && queued(stream) < CAMERA_FRAME) stream.write(cameraFrame(toI420(ctx.getImageData(0,0,320,240).data,320,240),320,240));
+                        self.out.photos++; self.out.photoMs += Date.now() - photoStart;
+                        if (self.sendingVideo()) {
+                            if (queued(stream) < CAMERA_FRAME) { stream.write(cameraFrame(toI420(ctx.getImageData(0,0,320,240).data,320,240),320,240)); self.out.sent++; }
+                            else self.out.skipped++;
+                        }
                         self.cameraReady = true;
                         self.emit('camera-ready');
                     };image.src = url;
@@ -174,14 +191,24 @@ class RobotMedia extends events.EventEmitter {
         } catch (error) { this.cameraNote('capture threw', error); this.pending = false; }
     }
     sendingVideo() { return this.callActive && this.cameraEnabled; }
-    setCallActive(active) { this.callActive = active; if (!active) this.cameraEnabled = false; }
-    setCamera(enabled) { this.cameraEnabled = !!enabled; }
+    setCallActive(active) {
+        if (active !== this.callActive) note('call ' + (active ? 'active: the microphone now goes to the call' : 'no longer active') + ' (' + this.since() + ')');
+        this.callActive = active; if (!active) this.setCamera(false);
+    }
+    setCamera(enabled) {
+        enabled = !!enabled;
+        if (enabled !== this.cameraEnabled) note('camera ' + (enabled ? 'ON for the call' + (this.callActive ? '' : ' (but the call is not active yet, so nothing is sent)') : 'off'));
+        this.cameraEnabled = enabled;
+        if (this.outTimer !== null) { clearInterval(this.outTimer); this.outTimer = null; }
+        if (enabled) { var self = this; this.out = {sent: 0, skipped: 0, photos: 0, photoMs: 0}; this.outTimer = setInterval(function () { self.outSummary(); }, 3000); }
+    }
     fail(reason) { if (this.closed) return; note('device lost (' + this.since() + '): ' + (reason || 'no reason given')); this.emit('unavailable'); this.stop(Error('media_unavailable')); }
     stop(reason) {
         this.closed = true;
         var abort = this.abortStart; this.abortStart = null;
         if (abort) abort(reason || Error('media_closed'));
         if (this.timer !== null) clearInterval(this.timer); this.timer = null;
+        if (this.outTimer !== null) clearInterval(this.outTimer); this.outTimer = null;
         (this.listeners || []).splice(0).forEach(function (l) { l[0].removeListener(l[1], l[2]); });
         var children = this.children.splice(0);
         return Promise.all(children.map(function (child) { return new Promise(function (resolve,reject) {

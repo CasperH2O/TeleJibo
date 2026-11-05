@@ -227,6 +227,24 @@ test('received video frames survive split chunks; bad headers are refused', () =
     assert.throws(() => new RobotMedia.VideoFrames(() => {}).write(odd), /video_pipe_dimensions/);
 });
 
+test('camera frames build with the simulator Buffer, which has no write(string)', () => {
+    // The simulator's Buffer is a Uint8Array with integer accessors but no write(string, offset,
+    // encoding); the first camera frame of a call threw there and no video was ever sent.
+    const proto = Object.create(Uint8Array.prototype);
+    proto.writeUInt32LE = function (value, at) { new DataView(this.buffer, this.byteOffset).setUint32(at, value, true); };
+    const wrap = bytes => Object.setPrototypeOf(bytes, proto), real = globalThis.Buffer;
+    const simulated = size => wrap(new Uint8Array(size));
+    simulated.alloc = simulated;
+    simulated.concat = parts => { const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let at = 0; for (const p of parts) { out.set(p, at); at += p.length; } return wrap(out); };
+    globalThis.Buffer = simulated;
+    try {
+        const framed = RobotMedia.cameraFrame(new Uint8Array(115200), 320, 240), view = new DataView(framed.buffer, framed.byteOffset);
+        assert.equal(String.fromCharCode(...framed.subarray(0, 4)), 'JICF');
+        assert.equal(view.getUint32(4, true), 320); assert.equal(view.getUint32(8, true), 240);
+        assert.equal(framed.length, 12 + 115200);
+    } finally { globalThis.Buffer = real; }
+});
+
 test('I420 round trip keeps colours, and camera frames carry the JICF header', () => {
     const width = 4, height = 2, rgba = new Uint8ClampedArray(width * height * 4);
     for (let i = 0; i < width * height; ++i) rgba.set([200, 60, 30, 255], i * 4);

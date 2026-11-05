@@ -22,10 +22,16 @@ function setTracking(enabled) {
         return held.then(function (handle) { return handle.release(); }).catch(function () {}).then(function () { return false; });
     }
     if (tracking) return tracking.then(function () { return true; }, function () { return false; });
-    if (!expression || typeof expression.pushAttentionMode !== 'function') return Promise.resolve(false);
+    if (!expression || typeof expression.pushAttentionMode !== 'function') {
+        console.warn('[telejibo] tracking: jibo.expression.pushAttentionMode is not available here');
+        return Promise.resolve(false);
+    }
     var mode = expression.AttentionMode && expression.AttentionMode.ENGAGED || 'ENGAGED';
     var pushed = tracking = new Promise(function (resolve) { setTimeout(resolve, 0); }).then(function () { return expression.pushAttentionMode(mode); });
-    return pushed.then(function () { return true; }, function () { if (tracking === pushed) tracking = null; return false; });
+    return pushed.then(function () { console.warn('[telejibo] tracking: head tracking is on'); return true; }, function (error) {
+        console.warn('[telejibo] tracking: pushAttentionMode failed:', error && (error.code || error.message) || error);
+        if (tracking === pushed) tracking = null; return false;
+    });
 }
 // Camera, microphone and speaker are held only for a call; Jibo's own listening needs
 // the microphone the rest of the time.
@@ -92,6 +98,7 @@ var controller = {
         return controller.send({method: 'call.hangup', call_id: callId});
     },
     setCamera: function (enabled) {
+        console.warn('[telejibo] call: camera button ->', enabled ? 'on' : 'off', media ? '' : '(no media devices are open!)');
         if (media) media.setCamera(enabled);
         return controller.send({method: 'call.camera', enabled: enabled});
     },
@@ -106,7 +113,17 @@ var controller = {
         if (!apiFile) { screen.state = 'setup'; screen.render(); return; }
         supervisor = new Supervisor({appRoot: appRoot, dataRoot: dataRoot, apiFile: apiFile,
             stateDir: path.join(dataRoot, 'account'), media: true});
+        var statsNoted = 0;
         supervisor.on('status', function (value) {
+            // What the helper says about the call: states, errors, and how much video it receives
+            // (media_stats counts incoming video only; outgoing is logged by media.js).
+            if (value.event === 'call' || value.event === 'error') console.warn('[telejibo] helper', value.event, value.state || value.code || value.message || '');
+            if (value.event === 'media_stats' && Date.now() - statsNoted > 5000) {
+                statsNoted = Date.now();
+                console.warn('[telejibo] helper media_stats: video in', value.decoded_video_frames, 'frames', value.decoded_width + 'x' + value.decoded_height,
+                    'audio in', value.nonzero_audio_frames, 'dropped video/speaker', value.dropped_video_frames + '/' + value.dropped_speaker_frames,
+                    'pipe failed mic/speaker/video', !!value.microphone_pipe_failed + '/' + !!value.speaker_pipe_failed + '/' + !!value.video_pipe_failed);
+            }
             if (media && value.event === 'call') media.setCallActive(value.state === 'callStateReady');
             // A finished or refused call gives the devices back.
             if (value.event === 'call' && ['callStateDiscarded', 'callStateError'].indexOf(value.state) >= 0 ||

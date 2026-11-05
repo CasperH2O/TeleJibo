@@ -119,10 +119,11 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             }
             function hangup() { if (self.call) controller.hangup(self.call.call_id); }
             var actions = {
-                mute: function () { self.muted = !self.muted; controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
+                mute: function () { self.muted = !self.muted; console.warn('[telejibo] call: mute button -> microphone', self.muted ? 'muted' : 'on'); controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
                 camera: function () { self.camera = !self.camera; controller.setCamera(self.camera); self.render(); },
                 tracking: function () {
                     var call = self.call && self.call.call_id, wanted = !self.tracking;
+                    console.warn('[telejibo] call: tracking button ->', wanted ? 'on' : 'off');
                     self.tracking = wanted; self.render();
                     controller.setTracking(wanted).then(function (on) {
                         if (!wanted || on || !self.call || self.call.call_id !== call) return;
