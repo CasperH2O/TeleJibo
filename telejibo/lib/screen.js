@@ -112,7 +112,8 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 self.preparing = true; self.message = T.mediaStarting; self.render();
                 controller.prepareMedia().then(function () {
                     self.preparing = false; self.message = ''; go(); self.render();
-                }, function () {
+                }, function (error) {
+                    console.warn('[telejibo] media: showing "' + T.mediaUnavailable + '" because:', error && (error.code || error.message) || error);
                     self.preparing = false; self.message = T.mediaUnavailable; self.render();
                 });
             }

@@ -40,7 +40,7 @@ function releaseMedia() {
 function prepareMedia() {
     if (controller.mediaReady) return Promise.resolve();
     if (mediaStarting) return mediaStarting;
-    if (!supervisor || !supervisor.child) return Promise.reject(Error('media_unavailable'));
+    if (!supervisor || !supervisor.child) { console.warn('[telejibo] media: no helper is running, so there is nothing to attach the devices to'); return Promise.reject(Error('media_unavailable')); }
     var current = media = new RobotMedia(jibo);
     current.on('video', function (canvas) { if (skill) skill.videoFrame(canvas); });
     current.on('unavailable', function () {
@@ -53,6 +53,7 @@ function prepareMedia() {
         mediaStarting = null; controller.mediaReady = true;
         supervisor.send({method: 'media.ready', enabled: true});
     }, function (error) {
+        console.warn('[telejibo] media: devices not available for this call:', error && (error.code || error.message) || error);
         if (media === current) { media = null; mediaStarting = null; }
         throw error;
     });

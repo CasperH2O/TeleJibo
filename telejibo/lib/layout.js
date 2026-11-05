@@ -57,7 +57,9 @@ var contacts = {
 contacts.pageWidth = contacts.columns * (contacts.width + contacts.columnGap);
 
 // Status line (centre y per screen).
-var message = {width: 900, size: 32, y: {landscape: 515, incoming: 395, portrait: 650, other: 640}};
+// On the contacts screen the second card row ends at y 642 and the pager track runs 670-680,
+// so the line sits under the pager.
+var message = {width: 900, size: 32, y: {landscape: 515, incoming: 395, portrait: 650, contacts: 696, other: 640}};
 
 var incoming = {
     avatar: {x: 640, y: 156, size: 200, initials: 90}, name: {x: 640, y: 311, width: 1000, size: 64},
