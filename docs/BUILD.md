@@ -11,7 +11,8 @@ node --test tests/*.test.mjs
 ```
 
 They cover the layout rules (safe area, touch sizes, paging), the app key, the
-helper launch and supervisor, and the packager's limits and contents. The
+helper launch and supervisor, media framing and the device lifecycle (with fake
+devices), the skill controller, and the packager's limits and contents. The
 helper's own tests are described in [helper/README.md](../helper/README.md).
 
 ## The helper

@@ -85,6 +85,11 @@ function bindKeyboard(screen) {
 var controller = {
     mediaReady: false,
     send: function (value) { return !!supervisor && supervisor.send(value); },
+    // Camera frames stop with the tap, not when Telegram confirms the call ended.
+    hangup: function (callId) {
+        if (media) media.setCallActive(false);
+        return controller.send({method: 'call.hangup', call_id: callId});
+    },
     setCamera: function (enabled) {
         if (media) media.setCamera(enabled);
         return controller.send({method: 'call.camera', enabled: enabled});
@@ -112,8 +117,13 @@ var controller = {
             close().then(function () { if (screen.view) screen.leave(); });
         });
         supervisor.on('gone', function () {
-            screen.password = ''; screen.qr = null; screen.call = null; screen.state = 'closed'; screen.render();
-            if (!closePromise && screen.view) screen.leave();
+            // A close we asked for stops the helper too; its exit is no news then.
+            if (closePromise) return;
+            // Signed out (the helper said so) or stopped unexpectedly.
+            screen.password = ''; screen.qr = null; screen.call = null;
+            if (screen.state !== 'closed') screen.state = 'stopped';
+            screen.render();
+            if (screen.view) screen.leave();
         });
         bindKeyboard(screen);
         if (!supervisor.start()) return;

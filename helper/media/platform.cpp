@@ -38,9 +38,9 @@ public:
 };
 
 class Source : public rtc::AdaptedVideoTrackSource {
-    std::unique_ptr<jibo_media::Reader> input;
+    std::unique_ptr<jibo_media::FrameReader> input;
 public:
-    Source() { if (pipeCapture) input = std::make_unique<jibo_media::Reader>(jibo_media::camera, jibo_media::cameraBytes, 0); }
+    Source() { if (pipeCapture) input = std::make_unique<jibo_media::FrameReader>(jibo_media::camera, jibo_media::cameraWidth, jibo_media::cameraHeight); }
     SourceState state() const override { return kLive; }
     bool remote() const override { return false; }
     bool is_screencast() const override { return false; }

@@ -5,6 +5,7 @@
 #include <array>
 #include <algorithm>
 #include <cerrno>
+#include <cstddef>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -72,6 +73,70 @@ public:
             else { if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) failed = true; return false; }
         }
         std::copy(pending.begin(), pending.end(), out); filled = 0; return true;
+    }
+};
+
+// Camera input: `JICF`, little-endian uint32 width and height, then one I420 frame. The
+// header lets a reader find the next frame after any partial one (a frame cut short at a
+// call's end, or written before this reader existed), so framing can never drift.
+constexpr size_t cameraHeaderBytes = 12;
+inline std::array<uint8_t, cameraHeaderBytes> cameraHeader(uint32_t width, uint32_t height) {
+    std::array<uint8_t, cameraHeaderBytes> header{'J', 'I', 'C', 'F'};
+    for (int i = 0; i < 4; ++i) { header[4 + i] = uint8_t(width >> (8 * i)); header[8 + i] = uint8_t(height >> (8 * i)); }
+    return header;
+}
+
+class FrameReader {
+    int fd;
+    std::array<uint8_t, cameraHeaderBytes> header;
+    size_t payload;
+    std::vector<uint8_t> buffer;
+    // Reads what the pipe holds, keeping at most a few frames: older ones are stale anyway.
+    void fill() {
+        std::array<uint8_t, 16384> scratch;
+        size_t frame = cameraHeaderBytes + payload;
+        for (;;) {
+            auto n = read(fd, scratch.data(), scratch.size());
+            if (n > 0) {
+                buffer.insert(buffer.end(), scratch.data(), scratch.data() + n);
+                if (buffer.size() > 3 * frame) buffer.erase(buffer.begin(), buffer.end() - std::ptrdiff_t(2 * frame));
+                continue;
+            }
+            if (n < 0 && errno == EINTR) continue;
+            if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) failed = true;
+            return;
+        }
+    }
+    // Drops bytes before the next header; keeps a possible header prefix at the end.
+    void sync() {
+        auto at = std::search(buffer.begin(), buffer.end(), header.begin(), header.end());
+        if (at == buffer.end()) {
+            size_t keep = std::min(buffer.size(), cameraHeaderBytes - 1);
+            buffer.erase(buffer.begin(), buffer.end() - std::ptrdiff_t(keep));
+        } else buffer.erase(buffer.begin(), at);
+    }
+public:
+    std::atomic<bool> failed{false};
+    FrameReader(int descriptor, uint32_t width, uint32_t height)
+        : fd(descriptor), header(cameraHeader(width, height)), payload(size_t(width) * height * 3 / 2) { nonblocking(fd); drain(); }
+    // A new call must never receive frames captured before it started.
+    void drain() { fill(); buffer.clear(); }
+    // The newest complete frame, if one arrived since the last call.
+    bool frame(uint8_t *out) {
+        fill();
+        bool found = false;
+        for (;;) {
+            sync();
+            if (buffer.size() < cameraHeaderBytes + payload) return found;
+            // A header inside the payload means this frame was cut short: restart there.
+            auto body = buffer.begin() + cameraHeaderBytes, end = body + std::ptrdiff_t(payload);
+            auto limit = buffer.end() - end > std::ptrdiff_t(cameraHeaderBytes - 1) ? end + std::ptrdiff_t(cameraHeaderBytes - 1) : buffer.end();
+            auto next = std::search(body, limit, header.begin(), header.end());
+            if (next < end) { buffer.erase(buffer.begin(), next); continue; }
+            std::copy_n(buffer.begin() + cameraHeaderBytes, payload, out);
+            buffer.erase(buffer.begin(), buffer.begin() + std::ptrdiff_t(cameraHeaderBytes + payload));
+            found = true;
+        }
     }
 };
 

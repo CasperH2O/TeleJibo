@@ -36,7 +36,9 @@ your robot; install it only from a source you trust.
 Telegram identifies apps by an API id. Releases carry the publisher's id in a
 scrambled form; it is not a secret and gives no access to anyone's account.
 To use your own, place `{"api_id": 123, "api_hash": "…"}` in
-`api.override.json` beside the account folder.
+`api.override.json` beside the account folder. TeleJibo copies it into its own
+private key file (`api.json`, mode 0600) each time it starts, so the override
+needs no special permissions.
 
 ## How it works
 

@@ -42,6 +42,9 @@ class Supervisor extends events.EventEmitter {
             stdio: options.media ? ['pipe', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe']});
         var child = this.child;
         child.stdin.on('error', function () { self.fail('helper_input_failed'); });
+        // Media pipes outlive each call's RobotMedia: writes still queued when the helper
+        // exits fail with EPIPE, which must not become an uncaught error.
+        if (options.media) for (var fd = 3; fd <= 6; ++fd) if (child.stdio && child.stdio[fd]) child.stdio[fd].on('error', function () {});
         child.stdout.on('data', function (data) {
             self.buffer += self.decoder.write(data);
             var end;

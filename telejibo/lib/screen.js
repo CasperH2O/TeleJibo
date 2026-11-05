@@ -116,7 +116,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                     self.preparing = false; self.message = T.mediaUnavailable; self.render();
                 });
             }
-            function hangup() { if (self.call) controller.send({method: 'call.hangup', call_id: self.call.call_id}); }
+            function hangup() { if (self.call) controller.hangup(self.call.call_id); }
             var actions = {
                 mute: function () { self.muted = !self.muted; controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
                 camera: function () { self.camera = !self.camera; controller.setCamera(self.camera); self.render(); },
@@ -399,7 +399,8 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.text('message', this.message);
             var message = this.component('message');
             if (message && message.display) message.display.y = layout.message.y[screen] || layout.message.y.other;
-            this.text('waiting', this.state === 'closed' ? T.signedOut : this.state === 'setup' ? T.setupMissing : T.connecting);
+            this.text('waiting', this.state === 'closed' ? T.signedOut : this.state === 'stopped' ? T.stopped :
+                this.state === 'setup' ? T.setupMissing : T.connecting);
             this.renderContacts(screen);
             this.text('password', this.password ? '•'.repeat(Math.min(Array.from(this.password).length, 24)) : T.passwordHint);
             this.fill('password', this.password ? C.text : C.caption);

@@ -81,5 +81,36 @@ int main() {
         check(!writer.failed);
     }
     close(full[0]); close(full[1]);
-    std::cout << "Private media pipes: fragmentation, EOF, stale drain, latency bound, output, stalls and shutdown passed\n";
+    int camera[2]; check(pipe(camera) == 0);
+    {
+        // Framed camera input: a frame cut short before (or while) a reader exists never
+        // shifts later frames, and only the newest complete frame is delivered.
+        auto framed = [](uint8_t value, size_t size) {
+            auto header = jibo_media::cameraHeader(4, 2);
+            std::vector<uint8_t> bytes(header.begin(), header.end());
+            bytes.insert(bytes.end(), size, value); return bytes;
+        };
+        auto send = [&](const std::vector<uint8_t> &bytes) {
+            check(write(camera[1], bytes.data(), bytes.size()) == ssize_t(bytes.size()));
+        };
+        std::array<uint8_t, 12> bytes{};
+        auto stale = framed(1, 12); stale.resize(17); send(stale);
+        jibo_media::FrameReader reader(camera[0], 4, 2);
+        check(!reader.frame(bytes.data()) && !reader.failed);
+        auto cut = framed(2, 12); cut.resize(9); send(cut);
+        send(framed(3, 12));
+        check(reader.frame(bytes.data()) && bytes[0] == 3 && bytes[11] == 3);
+        send(framed(4, 12)); send(framed(5, 12));
+        auto split = framed(6, 12); send(std::vector<uint8_t>(split.begin(), split.begin() + 5));
+        check(reader.frame(bytes.data()) && bytes[0] == 5);
+        check(!reader.frame(bytes.data()));
+        send(std::vector<uint8_t>(split.begin() + 5, split.end()));
+        check(reader.frame(bytes.data()) && bytes[0] == 6);
+        // Cut after a whole header: the next frame's header inside the payload wins.
+        auto headerOnly = framed(7, 12); headerOnly.resize(15); send(headerOnly); send(framed(8, 12));
+        check(reader.frame(bytes.data()) && bytes[0] == 8 && bytes[11] == 8);
+        close(camera[1]); check(!reader.frame(bytes.data()) && reader.failed);
+    }
+    close(camera[0]);
+    std::cout << "Private media pipes: fragmentation, EOF, stale drain, latency bound, output, stalls, camera resync and shutdown passed\n";
 }

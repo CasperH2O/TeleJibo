@@ -53,14 +53,17 @@ function readJson(file) {
     return value;
 }
 
-// The helper's --api-file: the person's override, or the bundled pair written (0600) into
-// the private data root. Returns null when neither exists.
+// The helper's --api-file: the person's override, else the bundled pair, written (0600)
+// into the private data root. The helper only reads a regular file it owns that no one
+// else may read, so an override is copied there rather than passed as placed (any mode,
+// owner or link). Returns null when neither exists.
 function apiFile(appRoot, dataRoot) {
-    var override = path.join(dataRoot, 'api.override.json');
-    if (fs.existsSync(override)) { readJson(override); return override; }
-    var bundled = path.join(appRoot, 'config', 'app-key.bin');
-    if (!fs.existsSync(bundled)) return null;
-    var value = decode(fs.readFileSync(bundled)), target = path.join(dataRoot, 'api.json');
+    var override = path.join(dataRoot, 'api.override.json'), bundled = path.join(appRoot, 'config', 'app-key.bin');
+    var value;
+    if (fs.existsSync(override)) value = readJson(override);
+    else if (fs.existsSync(bundled)) value = decode(fs.readFileSync(bundled));
+    else return null;
+    var target = path.join(dataRoot, 'api.json');
     var json = JSON.stringify(value) + '\n', current = null;
     try { current = fs.readFileSync(target, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (current !== json) {

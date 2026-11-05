@@ -23,22 +23,25 @@ only files inside TDLib's own photo and file directories are read. Lines are at
 most 128 KB. Keep QR links, passwords, contact and avatar events out of logs. See
 `media/account.h` for the command and event definitions.
 
-The helper refuses calls by default. The TeleJibo skill starts it with
-`--pipe-media` when it holds the camera, microphone and audio grants. Media then
-flows over private inherited pipes, never files:
+The helper refuses calls by default. The TeleJibo skill always starts it with
+`--pipe-media`; calls are then gated by `media.ready` (below), which the skill
+sends only while it holds the camera, microphone and speaker. Media flows over
+private inherited pipes, never files:
 
 | fd | Direction | Format |
 | --- | --- | --- |
 | 3 | to helper | microphone, S16LE stereo 48 kHz, 10 ms frames |
 | 4 | from helper | decoded call audio, same format |
-| 5 | to helper | camera, I420 320×240 frames |
+| 5 | to helper | camera: `JICF`, little-endian uint32 width and height (320, 240), I420 |
 | 6 | from helper | received video: `JIVF`, little-endian uint32 width and height, I420 |
 
 Calls stay refused until the app sends `{"method":"media.ready","enabled":true}`,
 which it does only after its microphone and camera have delivered data. The camera
 starts off for every call. Stale input is discarded when a call starts, queued
 microphone audio is capped at about 50 ms, and output queues are bounded and drop
-rather than block.
+rather than block. The camera header lets the helper find the next whole frame
+after a partial one (a frame cut short when a call ended), so camera framing never
+drifts; only the newest complete frame is used.
 
 `--synthetic-media` instead enables pattern/tone capture and headless receive
 sinks for development with a consenting contact; it does not access robot

@@ -5,6 +5,7 @@
 // through the LPS media service's photographer preview. Media flows over the helper's
 // private pipes (fd 3 microphone in, 4 audio out, 5 camera in, 6 video out; HELPER.md).
 var events = require('events'), childProcess = require('child_process');
+var CAMERA_FRAME = 12 + 320 * 240 * 3 / 2;
 function queued(stream) { return typeof stream.writableLength === 'number' ? stream.writableLength : stream._writableState && stream._writableState.length || 0; }
 
 function toI420(rgba, width, height) {
@@ -24,6 +25,13 @@ function toI420(rgba, width, height) {
         }
     }
     return bytes;
+}
+// Camera input frame: `JICF`, little-endian uint32 width and height, then I420 (HELPER.md).
+// The header lets the helper find the next whole frame after any partial one.
+function cameraFrame(i420, width, height) {
+    var header = Buffer.alloc(12);
+    header.write('JICF', 0, 'ascii'); header.writeUInt32LE(width, 4); header.writeUInt32LE(height, 8);
+    return Buffer.concat([header, i420]);
 }
 function fromI420(bytes, width, height, rgba) {
     var size = width * height;
@@ -60,14 +68,16 @@ class RobotMedia extends events.EventEmitter {
     }
     start(helper) {
         var self = this, spawn = this.options.spawn || childProcess.spawn, limit = this.options.timeoutMs || 20000;
-        this.helper = helper; this.closed = false; this.pending = false; this.listeners = [];
+        this.helper = helper; this.closed = false; this.pending = false; this.listeners = []; this.abortStart = null;
         this.callActive = false; this.cameraReady = false; this.cameraEnabled = false;
         if (!helper.stdio || helper.stdio.length < 7) return Promise.reject(Error('media_pipes_unavailable'));
         function listen(emitter, event, fn) { emitter.on(event, fn); self.listeners.push([emitter, event, fn]); }
         function within(name, ready) {
             return new Promise(function (resolve, reject) {
-                var timeout = setTimeout(function () { reject(Error(name + '_unavailable')); }, limit);
-                ready(function () { clearTimeout(timeout); resolve(); });
+                var timeout = setTimeout(function () { self.abortStart = null; reject(Error(name + '_unavailable')); }, limit);
+                // A device that fails or a stop() ends the wait at once, not after the timeout.
+                self.abortStart = function (error) { clearTimeout(timeout); reject(error); };
+                ready(function () { clearTimeout(timeout); self.abortStart = null; resolve(); });
             });
         }
         this.capture = document.createElement('canvas'); this.capture.width = 320; this.capture.height = 240;
@@ -86,6 +96,8 @@ class RobotMedia extends events.EventEmitter {
         var speaker = spawn('gst-launch-1.0', ['-q','fdsrc','fd=0','blocksize=1920','!',
             'audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2','!','audioconvert','!','audioresample','!',
             'alsasink','device=MediaOut','sync=false'], {stdio:['pipe','ignore','pipe']});
+        // Writes to a speaker that has just exited fail with EPIPE before its exit arrives.
+        speaker.stdin.on('error',function () { if (!self.closed) self.fail(); });
         this.children = [microphone,speaker];
         this.children.forEach(function (child) {
             child.on('error',function () { if (!self.closed) self.fail(); });
@@ -125,7 +137,7 @@ class RobotMedia extends events.EventEmitter {
                         if (self.closed) return;
                         var ctx = self.capture.getContext('2d'); ctx.drawImage(image,0,0,320,240);
                         var stream = self.helper.stdio[5];
-                        if (self.sendingVideo() && queued(stream) < 115200) stream.write(toI420(ctx.getImageData(0,0,320,240).data,320,240));
+                        if (self.sendingVideo() && queued(stream) < CAMERA_FRAME) stream.write(cameraFrame(toI420(ctx.getImageData(0,0,320,240).data,320,240),320,240));
                         self.cameraReady = true;
                         self.emit('camera-ready');
                     };image.src = url;
@@ -136,9 +148,11 @@ class RobotMedia extends events.EventEmitter {
     sendingVideo() { return this.callActive && this.cameraEnabled; }
     setCallActive(active) { this.callActive = active; if (!active) this.cameraEnabled = false; }
     setCamera(enabled) { this.cameraEnabled = !!enabled; }
-    fail() { if (this.closed) return; this.emit('unavailable'); this.stop(); }
-    stop() {
+    fail() { if (this.closed) return; this.emit('unavailable'); this.stop(Error('media_unavailable')); }
+    stop(reason) {
         this.closed = true;
+        var abort = this.abortStart; this.abortStart = null;
+        if (abort) abort(reason || Error('media_closed'));
         if (this.timer !== null) clearInterval(this.timer); this.timer = null;
         (this.listeners || []).splice(0).forEach(function (l) { l[0].removeListener(l[1], l[2]); });
         var children = this.children.splice(0);
@@ -153,4 +167,5 @@ class RobotMedia extends events.EventEmitter {
 module.exports = RobotMedia;
 module.exports.VideoFrames = VideoFrames;
 module.exports.toI420 = toI420;
+module.exports.cameraFrame = cameraFrame;
 module.exports.fromI420 = fromI420;
