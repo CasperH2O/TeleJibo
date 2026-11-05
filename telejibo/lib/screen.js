@@ -63,12 +63,19 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             else if (value.event === 'avatar') { this.avatar(value.user_id, value.jpeg); return; }
             else if (value.event === 'media') this.mediaState = value.state;
             else if (value.event === 'call') {
-                // Each call starts with the microphone on and the camera off,
-                // and never shows the previous call's last video frame.
+                // Each call starts with the microphone on and, once the call is up (below), the
+                // camera on too; the person can switch it off. A new call never shows the previous
+                // call's last video frame.
                 if (!this.call || this.call.call_id !== value.call_id) { this.muted = false; this.camera = false; this.mediaState = 'connecting'; this.message = ''; this.callStarted = 0; this.disposeVideo(); }
                 // Head tracking, like the camera, is per call.
                 this.call = value;
-                if (value.state === 'callStateReady' && !this.callStarted) this.callStarted = Date.now();
+                if (value.state === 'callStateReady' && !this.callStarted) {
+                    this.callStarted = Date.now();
+                    // The helper keeps its camera off until asked, and the buttons only appear now.
+                    this.camera = true; controller.setCamera(true);
+                    // Jibo's head follows the person in front of it during the call; the button turns it off.
+                    this.look(true, 'default');
+                }
                 if (['callStateDiscarded', 'callStateError'].indexOf(value.state) >= 0) {
                     this.call = null; this.callStarted = 0; this.disposeVideo();
                     if (this.tracking) { this.tracking = false; controller.setTracking(false); }
@@ -76,6 +83,16 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             } else if (value.event === 'error') { this.message = T.retry; if (this.turning) this.settle(0); }
             else if (value.event === 'signed_out') { this.state = 'closed'; this.qr = null; }
             this.render();
+        }
+        // Head tracking on or off for this call; if Jibo cannot start it the button falls back and says so.
+        look(wanted, why) {
+            var self = this, call = this.call && this.call.call_id;
+            console.warn('[telejibo] call: tracking', why, '->', wanted ? 'on' : 'off');
+            this.tracking = wanted; this.render();
+            controller.setTracking(wanted).then(function (on) {
+                if (!wanted || on || !self.call || self.call.call_id !== call) return;
+                self.tracking = false; self.message = T.trackingUnavailable; self.render();
+            });
         }
         config(views) {
             var self = this, components = [], L = layout;
@@ -121,15 +138,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             var actions = {
                 mute: function () { self.muted = !self.muted; console.warn('[telejibo] call: mute button -> microphone', self.muted ? 'muted' : 'on'); controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
                 camera: function () { self.camera = !self.camera; controller.setCamera(self.camera); self.render(); },
-                tracking: function () {
-                    var call = self.call && self.call.call_id, wanted = !self.tracking;
-                    console.warn('[telejibo] call: tracking button ->', wanted ? 'on' : 'off');
-                    self.tracking = wanted; self.render();
-                    controller.setTracking(wanted).then(function (on) {
-                        if (!wanted || on || !self.call || self.call.call_id !== call) return;
-                        self.tracking = false; self.message = T.trackingUnavailable; self.render();
-                    });
-                },
+                tracking: function () { self.look(!self.tracking, 'button'); },
                 hangup: hangup
             };
 
