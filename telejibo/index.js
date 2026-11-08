@@ -10,7 +10,7 @@ var paths = require('./lib/paths'), layout = require('./lib/layout'), createScre
 var createLog = require('./lib/log'), log = createLog();
 
 var appRoot = __dirname;
-var supervisor = null, skill = null, media = null, mediaStarting = null, tracking = null, closePromise = null;
+var supervisor = null, skill = null, media = null, mediaStarting = null, mediaReleasing = null, tracking = null, closePromise = null;
 var unhook = [];
 
 // Jibo's own head tracking. The attention service keeps a stack where the newest mode wins;
@@ -37,16 +37,30 @@ function setTracking(enabled) {
 // Camera, microphone and speaker are held only for a call; Jibo's own listening needs
 // the microphone the rest of the time.
 function releaseMedia() {
+    if (mediaReleasing) return mediaReleasing;
     var current = media;
-    media = null; mediaStarting = null;
+    mediaStarting = null;
     if (controller.mediaReady && supervisor) supervisor.send({method: 'media.ready', enabled: false});
     controller.mediaReady = false;
-    // A device child that outlives SIGKILL cannot be helped here; teardown goes on.
-    return Promise.resolve(current ? current.stop() : null).catch(function () {});
+    mediaReleasing = Promise.resolve(current ? current.stop() : null).then(function () {
+        if (media === current) media = null;
+        mediaReleasing = null;
+    }, function (error) {
+        // Keep ownership so close or the next preparation can retry native stop.
+        mediaReleasing = null;
+        log.error('media: cleanup failed; native resources still need release: ' + (error.message || error));
+        throw error;
+    });
+    // Event handlers may initiate release without awaiting it. Close/preparation
+    // still receive the original rejection and cannot declare cleanup successful.
+    mediaReleasing.catch(function () {});
+    return mediaReleasing;
 }
 function prepareMedia() {
     if (controller.mediaReady) return Promise.resolve();
+    if (mediaReleasing) return mediaReleasing.then(prepareMedia);
     if (mediaStarting) return mediaStarting;
+    if (media) return releaseMedia().then(prepareMedia);
     if (!supervisor || !supervisor.child) { log.error('media: no helper is running, so there is nothing to attach the devices to'); return Promise.reject(Error('media_unavailable')); }
     var current = media = new RobotMedia(jibo, {log: skill && skill.log});
     current.on('video', function (canvas) { if (skill) skill.videoFrame(canvas); });
@@ -61,7 +75,7 @@ function prepareMedia() {
         supervisor.send({method: 'media.ready', enabled: true});
     }, function (error) {
         log.error('media: devices not available for this call:', error && (error.code || error.message) || error);
-        if (media === current) { media = null; mediaStarting = null; }
+        if (media === current) mediaStarting = null;
         throw error;
     });
     return mediaStarting;
@@ -72,7 +86,7 @@ function close() {
     setTracking(false); unbind();
     closePromise = releaseMedia().then(function () {
         return supervisor ? supervisor.stop() : null;
-    }).then(function () { supervisor = null; closePromise = null; }, function (error) { supervisor = null; closePromise = null; throw error; });
+    }).then(function () { supervisor = null; closePromise = null; }, function (error) { closePromise = null; throw error; });
     return closePromise;
 }
 // A hardware keyboard (the simulator, or one plugged into the robot) can type the password.
@@ -128,7 +142,7 @@ var controller = {
                     'audio in', value.nonzero_audio_frames, 'dropped video/speaker', value.dropped_video_frames + '/' + value.dropped_speaker_frames,
                     'pipe failed mic/speaker/video', !!value.microphone_pipe_failed + '/' + !!value.speaker_pipe_failed + '/' + !!value.video_pipe_failed);
             }
-            if (media && value.event === 'call') media.setCallActive(value.state === 'callStateReady');
+            if (media && !media.closed && value.event === 'call') media.setCallActive(value.state === 'callStateReady');
             // A finished or refused call gives the devices back.
             if (value.event === 'call' && ['callStateDiscarded', 'callStateError'].indexOf(value.state) >= 0 ||
                 value.event === 'error' && !screen.call && !mediaStarting) releaseMedia();

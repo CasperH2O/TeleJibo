@@ -260,7 +260,7 @@ test('I420 round trip keeps colours, and camera frames carry the JICF header', (
 
 // Stand-ins for gst-launch children, the helper's pipes and the face's camera preview.
 function fakeDevices() {
-    const children = [], writes = {3: [], 5: []};
+    const children = [], cameras = [], writes = {3: [], 5: []};
     const stream = () => Object.assign(new EventEmitter(), {writableLength: 0, write: () => true});
     const helper = {stdio: [null, null, null, stream(), stream(), stream(), stream()]};
     for (const fd of [3, 5]) helper.stdio[fd].write = (bytes) => { writes[fd].push(bytes); return true; };
@@ -274,7 +274,12 @@ function fakeDevices() {
         createImageData: (w, h) => ({data: new Uint8ClampedArray(w * h * 4)}), putImageData() {}})});
     const jibo = {media: {PhotoType: {PREVIEW: 'preview'}, takePhoto: (options, done) => setImmediate(() => done(null, {url: 'preview.jpg'}))},
         loader: {load: (options, done) => setImmediate(() => done(null, Buffer.from('jpeg')))}};
-    return {children, writes, helper, spawn, jibo, canvas};
+    class Camera extends EventEmitter {
+        constructor() { super(); cameras.push(this); this.stopped = 0; }
+        start() { this.emit('frame', Buffer.alloc(115200)); return Promise.resolve(); }
+        stop() { this.stopped++; return Promise.resolve(); }
+    }
+    return {children, cameras, camera: Camera, writes, helper, spawn, jibo, canvas};
 }
 function withBrowserGlobals(canvas, fn) {
     const saved = {document: globalThis.document, Image: globalThis.Image, createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL};
@@ -290,7 +295,7 @@ function withBrowserGlobals(canvas, fn) {
 test('media: a device that fails at once rejects start immediately, not after the timeout', () => {
     const d = fakeDevices();
     return withBrowserGlobals(d.canvas, async () => {
-        const media = new RobotMedia(d.jibo, {spawn: d.spawn, timeoutMs: 60000});
+        const media = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, timeoutMs: 60000});
         let unavailable = 0; media.on('unavailable', () => ++unavailable);
         const started = media.start(d.helper);
         d.children[0].exitCode = 1; d.children[0].emit('exit', 1); d.children[0].emit('close', 1);
@@ -304,22 +309,24 @@ test('media: a device that fails at once rejects start immediately, not after th
 test('media: start, framed camera only during a call with the camera on, clean stop', () => {
     const d = fakeDevices();
     return withBrowserGlobals(d.canvas, async () => {
-        const media = new RobotMedia(d.jibo, {spawn: d.spawn, timeoutMs: 60000});
+        const media = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, timeoutMs: 60000});
         const started = media.start(d.helper);
         d.children[0].stdout.emit('data', Buffer.alloc(1920));
         assert.equal(await Promise.race([started, tick(1000).then(() => 'timeout')]), true);
         assert.equal(d.writes[3].length, 0, 'no microphone audio outside a call');
         assert.equal(d.writes[5].length, 0, 'the readiness probe sends no frame');
         media.setCallActive(true); media.setCamera(true);
-        media.cameraFrame(); await tick(20);
+        await media.cameraTransition;
         assert.equal(d.writes[5].length, 1);
         assert.equal(d.writes[5][0].toString('ascii', 0, 4), 'JICF');
         assert.equal(d.writes[5][0].length, 12 + 320 * 240 * 3 / 2);
         d.children[0].stdout.emit('data', Buffer.alloc(1920));
         assert.equal(d.writes[3].length, 1);
         media.setCallActive(false);
-        media.cameraFrame(); await tick(20);
+        await media.cameraTransition;
+        d.cameras[0].emit('frame', Buffer.alloc(115200));
         assert.equal(d.writes[5].length, 1, 'camera stops with the call');
+        assert.ok(d.cameras[0].stopped >= 2, 'probe and camera-off release the native stream');
         await media.stop();
         assert.ok(d.children.every((c) => c.killed.includes('SIGTERM')));
         assert.equal(d.helper.stdio[6].listenerCount('data'), 0);
@@ -329,11 +336,11 @@ test('media: start, framed camera only during a call with the camera on, clean s
 test('media: stop during start rejects at once, and a speaker EPIPE is not uncaught', () => {
     const d = fakeDevices();
     return withBrowserGlobals(d.canvas, async () => {
-        const media = new RobotMedia(d.jibo, {spawn: d.spawn, timeoutMs: 60000});
+        const media = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, timeoutMs: 60000});
         const started = media.start(d.helper);
         media.stop();
         assert.equal(await Promise.race([started.then(() => 'started', (e) => e.message), tick(500).then(() => 'still waiting')]), 'media_closed');
-        const again = new RobotMedia(d.jibo, {spawn: d.spawn, timeoutMs: 60000});
+        const again = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, timeoutMs: 60000});
         let unavailable = 0; again.on('unavailable', () => ++unavailable);
         const second = again.start(d.helper).catch((e) => e.message);
         d.children[3].stdin.emit('error', Object.assign(Error('EPIPE'), {code: 'EPIPE'}));
@@ -437,4 +444,17 @@ test('controller: an unexpected helper exit says stopped; after sign-out it says
     opened.screen.state = 'closed';
     opened.supervisor.emit('gone');
     assert.equal(opened.screen.state, 'closed');
+});
+
+test('controller retains failed native cleanup and retries it before opening new media', async () => {
+    const {controller, medias} = openController();
+    await controller.prepareMedia();
+    let stops = 0;
+    medias[0].stop = () => ++stops === 1 ? Promise.reject(Error('native_stop_failed')) : Promise.resolve();
+    await assert.rejects(controller.releaseMedia(), /native_stop_failed/);
+    assert.equal(controller.mediaReady, false);
+    await controller.prepareMedia();
+    assert.equal(stops,2);
+    assert.equal(medias.length,2);
+    await controller.close();
 });

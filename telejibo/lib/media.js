@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 'use strict';
 // Robot devices for a call, held only while one runs: the microphone (ALSA MediaIn) and
-// speaker (ALSA MediaOut) through gst-launch, as BEam's own players do, and the camera
-// through the LPS media service's photographer preview. Media flows over the helper's
+// speaker (ALSA MediaOut) through gst-launch, and the camera through the native media service's continuous VP8/WebM stream. Media flows over the helper's
 // private pipes (fd 3 microphone in, 4 audio out, 5 camera in, 6 video out; HELPER.md).
 var events = require('events'), childProcess = require('child_process');
-var createLog = require('./log');
+var createLog = require('./log'), NativeCamera = require('./camera');
 var CAMERA_FRAME = 12 + 320 * 240 * 3 / 2;
 // Why a device fails is only knowable from these lines (the screen shows one message for
 // every cause), so each stage of opening the devices says what it is doing and how long it took.
@@ -70,28 +69,27 @@ class RobotMedia extends events.EventEmitter {
     constructor(jibo, options) {
         super(); this.jibo = jibo; this.options = options || {}; this.children = []; this.closed = false;
         this.log = createLog(this.options.log, 'media');
-        this.timer = null; this.pending = false; this.helper = null; this.canvas = null; this.listeners = [];
+        this.cameraTransition = Promise.resolve(); this.helper = null; this.canvas = null; this.listeners = [];
         this.callActive = false; this.cameraReady = false; this.cameraEnabled = false;
-        this.began = 0; this.cameraNoted = {}; this.cameraTries = 0;
-        this.out = {sent: 0, skipped: 0, photos: 0, photoMs: 0}; this.outTimer = null;
+        this.began = 0; this.stopping = null;
+        this.out = {sent: 0, skipped: 0, frames: 0}; this.outTimer = null;
     }
     // While the camera is on for a call, say every 3 s how many frames went to the helper: no
-    // line at all means the camera was never switched on, zero sent means no photo arrived or
+    // line at all means the camera was never switched on, zero sent means no decoded frame arrived or
     // the helper's pipe is full.
     outSummary() {
         var o = this.out, stream = this.helper && this.helper.stdio && this.helper.stdio[5];
-        this.log.debug('camera out: ' + o.sent + ' frames sent, ' + o.skipped + ' skipped (helper pipe full), ' + o.photos +
-            ' photos taken' + (o.photos ? ' (' + Math.round(o.photoMs / o.photos) + ' ms each)' : '') +
-            ', pipe queued ' + (stream ? queued(stream) : '?') + ' bytes, last problem: ' + (this.cameraLast || 'none'));
-        this.out = {sent: 0, skipped: 0, photos: 0, photoMs: 0};
+        this.log.debug('camera out: ' + o.sent + ' frames sent, ' + o.skipped + ' skipped (helper pipe full), ' + o.frames +
+            ' decoded frames, pipe queued ' + (stream ? queued(stream) : '?') + ' bytes');
+        this.out = {sent: 0, skipped: 0, frames: 0};
     }
     since() { return Math.round(Date.now() - this.began) + 'ms'; }
     start(helper) {
         var self = this, spawn = this.options.spawn || childProcess.spawn, limit = this.options.timeoutMs || 20000;
         var note = this.log.info.bind(this.log);
-        this.helper = helper; this.closed = false; this.pending = false; this.listeners = []; this.abortStart = null;
+        this.helper = helper; this.closed = false; this.stopping = null; this.listeners = []; this.abortStart = null;
         this.callActive = false; this.cameraReady = false; this.cameraEnabled = false;
-        this.began = Date.now(); this.cameraNoted = {}; this.cameraTries = 0;
+        this.began = Date.now();
         note('start: helper pipes', helper.stdio ? helper.stdio.length : 'none', '(7 needed), device timeout', limit + 'ms');
         if (!helper.stdio || helper.stdio.length < 7) { this.log.error('FAILED media_pipes_unavailable: the helper was started without fd 3-6'); return Promise.reject(Error('media_pipes_unavailable')); }
         function listen(emitter, event, fn) { emitter.on(event, fn); self.listeners.push([emitter, event, fn]); }
@@ -100,8 +98,7 @@ class RobotMedia extends events.EventEmitter {
                 note('waiting for the ' + name + ' (' + self.since() + ')');
                 var timeout = setTimeout(function () {
                     self.abortStart = null;
-                    self.log.error('FAILED ' + name + ': nothing after ' + self.since() + (name === 'camera' ?
-                        '; photo attempts ' + self.cameraTries + ', last problem: ' + (self.cameraLast || 'none') : ''));
+                    self.log.error('FAILED ' + name + ': nothing after ' + self.since());
                     reject(Error(name + '_unavailable'));
                 }, limit);
                 // A device that fails or a stop() ends the wait at once, not after the timeout.
@@ -109,7 +106,6 @@ class RobotMedia extends events.EventEmitter {
                 ready(function () { clearTimeout(timeout); self.abortStart = null; note(name + ' ready after ' + self.since()); resolve(); });
             });
         }
-        this.capture = document.createElement('canvas'); this.capture.width = 320; this.capture.height = 240;
         this.canvas = document.createElement('canvas'); this.canvas.width = 320; this.canvas.height = 240;
         var decoder = new VideoFrames(function (bytes,width,height) {
             if (self.closed) return;
@@ -119,9 +115,14 @@ class RobotMedia extends events.EventEmitter {
         });
         listen(helper.stdio[6], 'data', function (bytes) { try { decoder.write(bytes); } catch (error) { self.fail('video pipe from the helper: ' + why(error)); } });
         [3,4,5,6].forEach(function (fd) { listen(helper.stdio[fd], 'error', function (error) { if (!self.closed) self.fail('helper pipe fd ' + fd + ': ' + why(error)); }); });
-        var microphone = spawn('gst-launch-1.0', ['-q','alsasrc','device=MediaIn','!','audioconvert','!','audioresample','!',
+        // MediaIn's copy routing selects channel 0 when opened as mono. Select
+        // speech at the native rate before upmixing for the helper; its second
+        // capture channel is a reference signal, not the other half of stereo.
+        var microphone = spawn('gst-launch-1.0', ['-q','alsasrc','device=MediaIn','!',
+            'audio/x-raw,format=S16LE,layout=interleaved,rate=16000,channels=1','!','audioconvert','!','audioresample','!',
             'audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2','!','fdsink','fd=1','sync=false'],
             {stdio:['ignore','pipe','pipe']});
+        note('microphone source: MediaIn, mono S16LE 16000 Hz; helper input: stereo S16LE 48000 Hz');
         var speaker = spawn('gst-launch-1.0', ['-q','fdsrc','fd=0','blocksize=1920','!',
             'audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2','!','audioconvert','!','audioresample','!',
             'alsasink','device=MediaOut','sync=false'], {stdio:['pipe','ignore','pipe']});
@@ -148,49 +149,32 @@ class RobotMedia extends events.EventEmitter {
             // A stalled speaker drops decoded audio; device loss is reported by exit.
             if (!self.closed && queued(speaker.stdin) < 38400) speaker.stdin.write(bytes);
         });
-        // One device at a time: concurrent first opens can queue behind each other.
+        var Camera = this.options.camera || NativeCamera;
+        this.cameraSource = new Camera(this.jibo, {spawn: spawn, log: this.log, timeoutMs: limit});
+        this.cameraSource.on('failure', function (error) { if (!self.closed) self.fail('native camera: ' + why(error)); });
+        this.cameraSource.on('frame', function (bytes) {
+            if (self.closed) return;
+            self.out.frames++;
+            if (self.sendingVideo()) {
+                var stream = helper.stdio[5];
+                if (queued(stream) < CAMERA_FRAME) { stream.write(cameraFrame(bytes,320,240)); self.out.sent++; }
+                else self.out.skipped++;
+            }
+            self.cameraReady = true;
+        });
+        // One device at a time: native startup is not evidence of a decoded frame.
         return within('microphone', function (done) { microphone.stdout.once('data', done); }).then(function () {
             if (self.closed) throw Error('media_closed');
-            self.timer = setInterval(function () { self.cameraFrame(); },100);
-            return within('camera', function (done) { self.once('camera-ready', done); });
+            return within('camera', function (done) {
+                // Probe and release before declaring media ready. Enabling the call's
+                // camera starts a fresh stream; camera-off keeps the sensor released.
+                self.cameraSource.start().then(function () { return self.cameraSource.stop(); }).then(done, function (error) {
+                    if (!self.closed) self.fail('camera preparation: ' + why(error));
+                });
+            });
         }).then(function () {
             if (self.closed) throw Error('media_closed'); return true;
         }).catch(function (error) { return self.stop().then(function () { throw error; }); });
-    }
-    // One line per distinct camera problem (and the first success), not one per 100 ms attempt.
-    cameraNote(stage, error) {
-        var text = stage + ': ' + why(error);
-        this.cameraLast = text;
-        if (this.cameraNoted[text]) { this.cameraNoted[text]++; return; }
-        this.cameraNoted[text] = 1; this.log.warn('camera problem at ' + text + ' (' + this.since() + ', attempt ' + this.cameraTries + ')');
-    }
-    cameraFrame() {
-        // Probe once for readiness, then capture only while this call's camera is on.
-        if (this.closed || this.pending || this.cameraReady && !this.sendingVideo()) return;
-        var self = this, photoStart = Date.now(); this.pending = true; ++this.cameraTries;
-        try {
-            this.jibo.media.takePhoto({photoType:this.jibo.media.PhotoType.PREVIEW,flip:false,undistort:true},function (error,photo) {
-                if (error || self.closed) { if (error) self.cameraNote('takePhoto (the LPS media service)', error); self.pending = false; return; }
-                self.jibo.loader.load({src:photo.url,format:'binary'},function (error,bytes) {
-                    if (error || self.closed) { if (error) self.cameraNote('loading the photo ' + photo.url, error); self.pending = false; return; }
-                    var url = URL.createObjectURL(new Blob([bytes],{type:'image/jpeg'})),image = new Image();
-                    image.onerror = function () { self.cameraNote('decoding the photo (' + (bytes && bytes.length) + ' bytes)', Error('not an image')); URL.revokeObjectURL(url); self.pending = false; };
-                    image.onload = function () {
-                        URL.revokeObjectURL(url); self.pending = false;
-                        if (self.closed) return;
-                        var ctx = self.capture.getContext('2d'); ctx.drawImage(image,0,0,320,240);
-                        var stream = self.helper.stdio[5];
-                        self.out.photos++; self.out.photoMs += Date.now() - photoStart;
-                        if (self.sendingVideo()) {
-                            if (queued(stream) < CAMERA_FRAME) { stream.write(cameraFrame(toI420(ctx.getImageData(0,0,320,240).data,320,240),320,240)); self.out.sent++; }
-                            else self.out.skipped++;
-                        }
-                        self.cameraReady = true;
-                        self.emit('camera-ready');
-                    };image.src = url;
-                });
-            });
-        } catch (error) { this.cameraNote('capture threw', error); this.pending = false; }
     }
     sendingVideo() { return this.callActive && this.cameraEnabled; }
     setCallActive(active) {
@@ -201,24 +185,46 @@ class RobotMedia extends events.EventEmitter {
         enabled = !!enabled;
         if (enabled !== this.cameraEnabled) this.log.info('camera ' + (enabled ? 'ON for the call' + (this.callActive ? '' : ' (but the call is not active yet, so nothing is sent)') : 'off'));
         this.cameraEnabled = enabled;
+        if (this.cameraSource) {
+            var current = this;
+            // Cancel an in-flight startup at once on camera-off. The queued work
+            // reads the latest state so quick off/on/off taps cannot restart it late.
+            var canceled = this.sendingVideo() ? Promise.resolve() : this.cameraSource.stop();
+            this.cameraTransition = this.cameraTransition.catch(function () {}).then(function () { return canceled; }).then(function () {
+                if (current.closed) return;
+                return current.sendingVideo() ? current.cameraSource.start() : current.cameraSource.stop();
+            }).catch(function (error) {
+                if (!current.closed && error.message !== 'camera_closed') current.fail('camera transition: ' + why(error));
+            });
+        }
         if (this.outTimer !== null) { clearInterval(this.outTimer); this.outTimer = null; }
-        if (enabled) { var self = this; this.out = {sent: 0, skipped: 0, photos: 0, photoMs: 0}; this.outTimer = setInterval(function () { self.outSummary(); }, 3000); }
+        if (enabled) { var self = this; this.out = {sent: 0, skipped: 0, frames: 0}; this.outTimer = setInterval(function () { self.outSummary(); }, 3000); }
     }
-    fail(reason) { if (this.closed) return; this.log.error('device lost (' + this.since() + '): ' + (reason || 'no reason given')); this.emit('unavailable'); this.stop(Error('media_unavailable')); }
+    fail(reason) {
+        if (this.closed) return;
+        this.log.error('device lost (' + this.since() + '): ' + (reason || 'no reason given'));
+        var self = this, stopped = this.stop(Error('media_unavailable'));
+        this.emit('unavailable');
+        stopped.catch(function (error) { self.log.error('media cleanup failed: ' + why(error)); });
+    }
     stop(reason) {
+        if (this.stopping) return this.stopping;
         this.closed = true;
         var abort = this.abortStart; this.abortStart = null;
         if (abort) abort(reason || Error('media_closed'));
-        if (this.timer !== null) clearInterval(this.timer); this.timer = null;
         if (this.outTimer !== null) clearInterval(this.outTimer); this.outTimer = null;
         (this.listeners || []).splice(0).forEach(function (l) { l[0].removeListener(l[1], l[2]); });
         var children = this.children.splice(0);
-        return Promise.all(children.map(function (child) { return new Promise(function (resolve,reject) {
+        var cameraStop = this.cameraSource ? this.cameraSource.stop() : Promise.resolve();
+        this.stopping = Promise.all([cameraStop].concat(children.map(function (child) { return new Promise(function (resolve,reject) {
             if (child.exitCode !== null && child.exitCode !== undefined) return resolve();
             var timer = setTimeout(function () { child.kill('SIGKILL'); },1000);
             var deadline = setTimeout(function () { reject(Error('media_cleanup_timeout')); },2000);
             child.once('close',function () { clearTimeout(timer);clearTimeout(deadline); resolve(); });child.kill('SIGTERM');
-        }); }));
+        }); })));
+        var self = this;
+        this.stopping = this.stopping.catch(function (error) { self.stopping = null; throw error; });
+        return this.stopping;
     }
 }
 module.exports = RobotMedia;
