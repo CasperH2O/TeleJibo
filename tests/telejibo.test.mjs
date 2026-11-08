@@ -355,6 +355,65 @@ test('media: stop during start rejects at once, and a speaker EPIPE is not uncau
     });
 });
 
+test('media: video test prepares without microphone access, keeps speaker audio and sends real camera frames', () => {
+    const d = fakeDevices(), speakerWrites = [];
+    return withBrowserGlobals(d.canvas, async () => {
+        const media = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, captureMicrophone: false,
+            microphone: class { constructor() { throw Error('must not access microphone'); } }});
+        try {
+            assert.equal(await media.start(d.helper), true);
+            assert.equal(d.children.length, 1, 'only the speaker pipeline is opened');
+            assert.equal(d.microphones.length, 0);
+            assert.equal(d.writes[5].length, 0, 'readiness probe is not sent to the call');
+            assert.equal(d.cameras[0].stopped, 1, 'readiness releases the camera');
+            d.children[0].stdin.write = bytes => { speakerWrites.push(bytes); return true; };
+            d.helper.stdio[4].emit('data', Buffer.alloc(1920, 3));
+            assert.equal(speakerWrites.length, 1, 'incoming call audio still reaches the speaker');
+            media.setCallActive(true); media.setCamera(true);
+            await media.cameraTransition;
+            assert.equal(d.writes[5].length, 1);
+            assert.equal(d.writes[5][0].toString('ascii', 0, 4), 'JICF');
+            assert.equal(d.writes[3].length, 0, 'microphone pipe remains empty');
+            media.setCallActive(false);
+            await media.cameraTransition;
+            d.cameras[0].emit('frame', Buffer.alloc(115200));
+            assert.equal(d.writes[5].length, 1, 'hangup stops video forwarding');
+        } finally { await media.stop(); }
+        assert.ok(d.children[0].killed.includes('SIGTERM'));
+        assert.equal(d.helper.stdio[6].listenerCount('data'), 0);
+    });
+});
+
+test('media: video test still rejects camera preparation failure', () => {
+    const d = fakeDevices();
+    class BrokenCamera extends d.camera { start() { return Promise.reject(Error('camera_no_frames')); } }
+    return withBrowserGlobals(d.canvas, async () => {
+        const media = new RobotMedia(d.jibo, {spawn: d.spawn, camera: BrokenCamera, captureMicrophone: false});
+        await assert.rejects(media.start(d.helper), /media_unavailable/);
+        assert.ok(d.children[0].killed.includes('SIGTERM'));
+    });
+});
+
+test('media: video test honors privacy at preparation and while forwarding camera frames', () => {
+    const d = fakeDevices(); d.jibo.privacyController = {enabled: true};
+    return withBrowserGlobals(d.canvas, async () => {
+        const blocked = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, captureMicrophone: false});
+        await assert.rejects(blocked.start(d.helper), /privacy_enabled/);
+        assert.equal(d.children.length, 0);
+        d.jibo.privacyController.enabled = false;
+        const media = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, captureMicrophone: false});
+        try {
+            await media.start(d.helper);
+            media.setCallActive(true); media.setCamera(true); await media.cameraTransition;
+            const sent = d.writes[5].length;
+            d.jibo.privacyController.enabled = true;
+            d.cameras[0].emit('frame', Buffer.alloc(115200));
+            assert.equal(media.closed, true);
+            assert.equal(d.writes[5].length, sent, 'privacy prevents further video forwarding');
+        } finally { await media.stop(); }
+    });
+});
+
 test('supervisor guards the media pipes against EPIPE after the helper exits', () => {
     const stdio = [0, 1, 2, 3, 4, 5, 6].map(() => new EventEmitter());
     const child = Object.assign(new EventEmitter(), {stdio, stdin: Object.assign(stdio[0], {write: () => true, end: () => {}}), stdout: stdio[1], stderr: stdio[2], kill: () => {}});
@@ -375,7 +434,7 @@ function loadController(data) {
         stop() { const child = this.child; this.child = null; if (child) this.emit('gone'); return Promise.resolve(); }
     }
     class FakeMedia extends EventEmitter {
-        constructor() { super(); this.callActive = null; this.camera = null; this.stopped = 0; medias.push(this); }
+        constructor(jibo, options) { super(); this.options = options; this.callActive = null; this.camera = null; this.stopped = 0; medias.push(this); }
         start() { return Promise.resolve(true); }
         setCallActive(active) { this.callActive = active; }
         setCamera(enabled) { this.camera = enabled; }
@@ -415,6 +474,7 @@ test('controller: an override key is copied into the private api.json', () => {
 test('controller: media is held only for a call, and hangup stops the camera at once', async () => {
     const {controller, supervisor, medias} = openController();
     await controller.prepareMedia();
+    assert.equal(medias[0].options.captureMicrophone, false, 'video-test controller disables microphone capture');
     assert.deepEqual(supervisor.sent.at(-1), {method: 'media.ready', enabled: true});
     supervisor.emit('status', {event: 'call', call_id: 5, state: 'callStateReady'});
     assert.equal(medias[0].callActive, true);

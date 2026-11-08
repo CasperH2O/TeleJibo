@@ -62,7 +62,7 @@ function prepareMedia() {
     if (mediaStarting) return mediaStarting;
     if (media) return releaseMedia().then(prepareMedia);
     if (!supervisor || !supervisor.child) { log.error('media: no helper is running, so there is nothing to attach the devices to'); return Promise.reject(Error('media_unavailable')); }
-    var current = media = new RobotMedia(jibo, {log: skill && skill.log});
+    var current = media = new RobotMedia(jibo, {log: skill && skill.log, captureMicrophone: controller.microphoneEnabled});
     current.on('video', function (canvas) { if (skill) skill.videoFrame(canvas); });
     current.on('unavailable', function () {
         if (media !== current) return;
@@ -105,6 +105,8 @@ function bindKeyboard(screen) {
 }
 
 var controller = {
+    // Temporary video-test build while platform microphone access is investigated.
+    microphoneEnabled: false,
     mediaReady: false,
     send: function (value) { return !!supervisor && supervisor.send(value); },
     // Camera frames stop with the tap, not when Telegram confirms the call ended.

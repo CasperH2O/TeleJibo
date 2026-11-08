@@ -18,6 +18,7 @@ var CALL = {
 };
 
 module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
+    var microphoneEnabled = controller.microphoneEnabled !== false;
     function frame(fn) { return typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, layout.contacts.spring.step); }
     return class TeleJiboScreen extends BeSkill {
         constructor() {
@@ -26,14 +27,14 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.view = null; this.state = 'starting'; this.page = {offset: 0, total: 0, users: []};
             this.call = null; this.password = ''; this.shift = false; this.symbols = false;
             this.groups = {}; this.labels = {}; this.fills = {}; this.sliding = []; this.cache = new Map();
-            this.message = ''; this.muted = false; this.camera = false; this.tracking = false; this.qr = null; this.closing = null;
+            this.message = ''; this.muted = !microphoneEnabled; this.camera = false; this.tracking = false; this.qr = null; this.closing = null;
             this.mediaState = 'connecting'; this.screen = null; this.callStarted = 0; this.clock = null; this.preparing = false;
             this.avatars = new Map(); this.serial = 0; this.art = null; this.decor = null;
             this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = '';
             // Contacts paging: strip offset in px, the finger's drag, the spring and a requested page.
             this.slide = {x: 0, velocity: 0, target: 0}; this.dragging = null; this.animation = null; this.turning = null; this.pan = null;
         }
-        // A call holds the robot's microphone; Hey Jibo must not take over mid-call.
+        // Hey Jibo must not take over mid-call, including during a video-only test.
         get isInterruptible() { return !this.call; }
         active() {
             var views = jibo.face.views;
@@ -64,14 +65,15 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             else if (value.event === 'avatar') { this.avatar(value.user_id, value.jpeg); return; }
             else if (value.event === 'media') this.mediaState = value.state;
             else if (value.event === 'call') {
-                // Each call starts with the microphone on and, once the call is up (below), the
+                // Each call starts with the configured microphone state and, once it is up, the
                 // camera on too; the person can switch it off. A new call never shows the previous
                 // call's last video frame.
-                if (!this.call || this.call.call_id !== value.call_id) { this.muted = false; this.camera = false; this.mediaState = 'connecting'; this.message = ''; this.callStarted = 0; this.disposeVideo(); }
+                if (!this.call || this.call.call_id !== value.call_id) { this.muted = !microphoneEnabled; this.camera = false; this.mediaState = 'connecting'; this.message = ''; this.callStarted = 0; this.disposeVideo(); }
                 // Head tracking, like the camera, is per call.
                 this.call = value;
                 if (value.state === 'callStateReady' && !this.callStarted) {
                     this.callStarted = Date.now();
+                    if (!microphoneEnabled) controller.send({method: 'call.mute', enabled: true});
                     // The helper keeps its camera off until asked, and the buttons only appear now.
                     this.camera = true; controller.setCamera(true);
                     // Jibo's head follows the person in front of it during the call; the button turns it off.
@@ -127,7 +129,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             // Devices open for each call; tell the person while they start.
             function withMedia(go) {
                 if (self.preparing) return;
-                self.preparing = true; self.message = T.mediaStarting; self.render();
+                self.preparing = true; self.message = microphoneEnabled ? T.mediaStarting : T.videoStarting; self.render();
                 controller.prepareMedia().then(function () {
                     self.preparing = false; self.message = ''; go(); self.render();
                 }, function (error) {
@@ -137,7 +139,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             }
             function hangup() { if (self.call) controller.hangup(self.call.call_id); }
             var actions = {
-                mute: function () { self.muted = !self.muted; self.diagnostics.info('call: mute button -> microphone', self.muted ? 'muted' : 'on'); controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
+                mute: function () { if (!microphoneEnabled) return; self.muted = !self.muted; self.diagnostics.info('call: mute button -> microphone', self.muted ? 'muted' : 'on'); controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
                 camera: function () { self.camera = !self.camera; controller.setCamera(self.camera); self.render(); },
                 tracking: function () { self.look(!self.tracking, 'button'); },
                 hangup: hangup
@@ -450,7 +452,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (screen === 'portrait') this.show('pHint', !this.videoSprite);
             this.text('lChip', this.chipText()); this.text('lEmojis', emojis);
             if (screen === 'landscape') this.show('lEmojis', !!emojis);
-            this.text('mute-text', this.muted ? T.unmute : T.mute);
+            this.text('mute-text', microphoneEnabled ? (this.muted ? T.unmute : T.mute) : T.micOff);
             var engaged = {mute: this.muted, camera: this.camera, tracking: this.tracking};
             ['', 'l'].forEach(function (prefix) {
                 var mine = (prefix ? 'landscape' : 'portrait') === screen;

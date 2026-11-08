@@ -28,14 +28,14 @@ var text = {
     title: 'TeleJibo', connecting: 'Connecting…', signedOut: 'Signed out',
     videoCall: 'Video call', noCalls: 'No calls', online: 'Online', missed: 'Missed call',
     incoming: 'Incoming video call', outgoing: 'Calling…', decline: 'Decline', accept: 'Answer', cancel: 'Cancel',
-    mute: 'Mute', unmute: 'Unmute', camera: 'Camera', tracking: 'Look at me', end: 'End', cameraOff: 'Camera off',
+    mute: 'Mute', unmute: 'Unmute', micOff: 'Mic off', camera: 'Camera', tracking: 'Look at me', end: 'End', cameraOff: 'Camera off',
     trackingUnavailable: 'Head tracking is unavailable',
     linkTitle: 'Link Telegram', steps: ['Open Telegram on your phone', 'Settings, Devices, Link Desktop Device', 'Scan the code'],
     waitingScan: 'Waiting for scan…',
     settings: 'Settings', signOut: 'Sign out', back: 'Back',
     passwordTitle: 'Two-step password', passwordHint: 'Password', shift: 'Shift', symbols: '#?!', remove: 'Delete', submit: 'Sign in',
-    setupMissing: 'TeleJibo is missing its sign-in setup', retry: 'Please try again', mediaStarting: 'Starting camera and microphone…',
-    mediaUnavailable: 'Camera or microphone unavailable', mediaStopped: 'Camera or microphone stopped', stopped: 'Connection stopped'
+    setupMissing: 'TeleJibo is missing its sign-in setup', retry: 'Please try again', mediaStarting: 'Starting camera and microphone…', videoStarting: 'Starting camera…',
+    mediaUnavailable: 'Call media unavailable', mediaStopped: 'Call media stopped', stopped: 'Connection stopped'
 };
 
 // Title row: name centred like the stock menus, settings in the top right. Pages show
