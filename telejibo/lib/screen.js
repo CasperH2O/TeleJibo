@@ -4,7 +4,7 @@
 // contact circles, the QR plate and video painted by art.js. Geometry, colours and copy
 // live in layout.js. No DOM/chat UI, photo downloads, payload logs or media persistence.
 var path = require('path');
-var layout = require('./layout'), createArt = require('./art');
+var layout = require('./layout'), createArt = require('./art'), createLog = require('./log');
 var C = layout.color, T = layout.text, B = layout.buttons;
 
 var STOCK_ICON = function (name) { return 'core://resources/actionIcons/' + name + '.png'; };
@@ -22,6 +22,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
     return class TeleJiboScreen extends BeSkill {
         constructor() {
             super(...arguments);
+            this.diagnostics = createLog(this.log);
             this.view = null; this.state = 'starting'; this.page = {offset: 0, total: 0, users: []};
             this.call = null; this.password = ''; this.shift = false; this.symbols = false;
             this.groups = {}; this.labels = {}; this.fills = {}; this.sliding = []; this.cache = new Map();
@@ -87,7 +88,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         // Head tracking on or off for this call; if Jibo cannot start it the button falls back and says so.
         look(wanted, why) {
             var self = this, call = this.call && this.call.call_id;
-            console.warn('[telejibo] call: tracking', why, '->', wanted ? 'on' : 'off');
+            this.diagnostics.info('call: tracking', why, '->', wanted ? 'on' : 'off');
             this.tracking = wanted; this.render();
             controller.setTracking(wanted).then(function (on) {
                 if (!wanted || on || !self.call || self.call.call_id !== call) return;
@@ -130,13 +131,13 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 controller.prepareMedia().then(function () {
                     self.preparing = false; self.message = ''; go(); self.render();
                 }, function (error) {
-                    console.warn('[telejibo] media: showing "' + T.mediaUnavailable + '" because:', error && (error.code || error.message) || error);
+                    self.diagnostics.error('media: showing "' + T.mediaUnavailable + '" because:', error && (error.code || error.message) || error);
                     self.preparing = false; self.message = T.mediaUnavailable; self.render();
                 });
             }
             function hangup() { if (self.call) controller.hangup(self.call.call_id); }
             var actions = {
-                mute: function () { self.muted = !self.muted; console.warn('[telejibo] call: mute button -> microphone', self.muted ? 'muted' : 'on'); controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
+                mute: function () { self.muted = !self.muted; self.diagnostics.info('call: mute button -> microphone', self.muted ? 'muted' : 'on'); controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
                 camera: function () { self.camera = !self.camera; controller.setCamera(self.camera); self.render(); },
                 tracking: function () { self.look(!self.tracking, 'button'); },
                 hangup: hangup

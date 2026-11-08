@@ -7,6 +7,7 @@ var path = require('path');
 var jibo = require('jibo'), BeSkill = require('@be/be-framework').BeSkill;
 var Supervisor = require('./lib/helper'), RobotMedia = require('./lib/media'), credentials = require('./lib/credentials');
 var paths = require('./lib/paths'), layout = require('./lib/layout'), createScreen = require('./lib/screen');
+var createLog = require('./lib/log'), log = createLog();
 
 var appRoot = __dirname;
 var supervisor = null, skill = null, media = null, mediaStarting = null, tracking = null, closePromise = null;
@@ -23,13 +24,13 @@ function setTracking(enabled) {
     }
     if (tracking) return tracking.then(function () { return true; }, function () { return false; });
     if (!expression || typeof expression.pushAttentionMode !== 'function') {
-        console.warn('[telejibo] tracking: jibo.expression.pushAttentionMode is not available here');
+        log.warn('tracking: jibo.expression.pushAttentionMode is not available here');
         return Promise.resolve(false);
     }
     var mode = expression.AttentionMode && expression.AttentionMode.ENGAGED || 'ENGAGED';
     var pushed = tracking = new Promise(function (resolve) { setTimeout(resolve, 0); }).then(function () { return expression.pushAttentionMode(mode); });
-    return pushed.then(function () { console.warn('[telejibo] tracking: head tracking is on'); return true; }, function (error) {
-        console.warn('[telejibo] tracking: pushAttentionMode failed:', error && (error.code || error.message) || error);
+    return pushed.then(function () { log.info('tracking: head tracking is on'); return true; }, function (error) {
+        log.warn('tracking: pushAttentionMode failed:', error && (error.code || error.message) || error);
         if (tracking === pushed) tracking = null; return false;
     });
 }
@@ -46,8 +47,8 @@ function releaseMedia() {
 function prepareMedia() {
     if (controller.mediaReady) return Promise.resolve();
     if (mediaStarting) return mediaStarting;
-    if (!supervisor || !supervisor.child) { console.warn('[telejibo] media: no helper is running, so there is nothing to attach the devices to'); return Promise.reject(Error('media_unavailable')); }
-    var current = media = new RobotMedia(jibo);
+    if (!supervisor || !supervisor.child) { log.error('media: no helper is running, so there is nothing to attach the devices to'); return Promise.reject(Error('media_unavailable')); }
+    var current = media = new RobotMedia(jibo, {log: skill && skill.log});
     current.on('video', function (canvas) { if (skill) skill.videoFrame(canvas); });
     current.on('unavailable', function () {
         if (media !== current) return;
@@ -59,7 +60,7 @@ function prepareMedia() {
         mediaStarting = null; controller.mediaReady = true;
         supervisor.send({method: 'media.ready', enabled: true});
     }, function (error) {
-        console.warn('[telejibo] media: devices not available for this call:', error && (error.code || error.message) || error);
+        log.error('media: devices not available for this call:', error && (error.code || error.message) || error);
         if (media === current) { media = null; mediaStarting = null; }
         throw error;
     });
@@ -98,29 +99,32 @@ var controller = {
         return controller.send({method: 'call.hangup', call_id: callId});
     },
     setCamera: function (enabled) {
-        console.warn('[telejibo] call: camera button ->', enabled ? 'on' : 'off', media ? '' : '(no media devices are open!)');
+        log.info('call: camera ->', enabled ? 'on' : 'off', media ? '' : '(no media devices are open!)');
         if (media) media.setCamera(enabled);
         return controller.send({method: 'call.camera', enabled: enabled});
     },
     // The view is up: start the helper with the app's Telegram key.
     opened: function (screen) {
         skill = screen;
+        log = createLog(screen.log);
+        log.info('opened');
         var dataRoot, apiFile;
         try {
             dataRoot = paths.ensureDirectory(paths.dataRoot());
             apiFile = credentials.apiFile(appRoot, dataRoot);
-        } catch (error) { apiFile = null; console.warn('[telejibo] sign-in setup unavailable:', error && (error.code || error.message)); }
+        } catch (error) { apiFile = null; log.error('sign-in setup unavailable:', error && (error.code || error.message)); }
         if (!apiFile) { screen.state = 'setup'; screen.render(); return; }
         supervisor = new Supervisor({appRoot: appRoot, dataRoot: dataRoot, apiFile: apiFile,
-            stateDir: path.join(dataRoot, 'account'), media: true});
+            stateDir: path.join(dataRoot, 'account'), media: true, log: screen.log});
         var statsNoted = 0;
         supervisor.on('status', function (value) {
             // What the helper says about the call: states, errors, and how much video it receives
             // (media_stats counts incoming video only; outgoing is logged by media.js).
-            if (value.event === 'call' || value.event === 'error') console.warn('[telejibo] helper', value.event, value.state || value.code || value.message || '');
+            if (value.event === 'call') log.info('helper call', value.state || '');
+            if (value.event === 'error') log.error('helper error', value.code || value.message || '');
             if (value.event === 'media_stats' && Date.now() - statsNoted > 5000) {
                 statsNoted = Date.now();
-                console.warn('[telejibo] helper media_stats: video in', value.decoded_video_frames, 'frames', value.decoded_width + 'x' + value.decoded_height,
+                log.debug('helper media_stats: video in', value.decoded_video_frames, 'frames', value.decoded_width + 'x' + value.decoded_height,
                     'audio in', value.nonzero_audio_frames, 'dropped video/speaker', value.dropped_video_frames + '/' + value.dropped_speaker_frames,
                     'pipe failed mic/speaker/video', !!value.microphone_pipe_failed + '/' + !!value.speaker_pipe_failed + '/' + !!value.video_pipe_failed);
             }

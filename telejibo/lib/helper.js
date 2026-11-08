@@ -5,6 +5,7 @@
 // output. No listener, raw-update logging or recordings.
 var childProcess = require('child_process'), events = require('events'), fs = require('fs'), path = require('path');
 var StringDecoder = require('string_decoder').StringDecoder;
+var createLog = require('./log');
 
 var EVENTS = ['helper', 'authorization', 'contacts', 'avatar', 'call', 'media', 'media_stats', 'status', 'error', 'signed_out'];
 var LOADER = '/lib/ld-linux-armhf.so.3';
@@ -25,6 +26,7 @@ class Supervisor extends events.EventEmitter {
     constructor(options) {
         super();
         this.options = options;
+        this.log = createLog(options.log, 'helper');
         this.child = null; this.buffer = ''; this.stopping = null; this.beat = null;
         this.decoder = new StringDecoder('utf8');
         this.timers = options.timers || require('timers');
@@ -33,7 +35,7 @@ class Supervisor extends events.EventEmitter {
         if (this.child) return true;
         var options = this.options, self = this, spec;
         try { spec = (options.launch || launch)(options.appRoot); }
-        catch (_) { this.emit('failure', 'helper_not_executable'); return false; }
+        catch (_) { this.log.error('helper_not_executable'); this.emit('failure', 'helper_not_executable'); return false; }
         var args = spec.prefix.concat(['--api-file', options.apiFile, '--state-dir', options.stateDir, '--require-heartbeat']);
         if (options.media) args.push('--pipe-media');
         var spawn = options.spawn || childProcess.spawn;
@@ -41,6 +43,7 @@ class Supervisor extends events.EventEmitter {
             env: {HOME: options.dataRoot, PATH: '/usr/bin:/bin', LANG: 'C', LD_LIBRARY_PATH: path.join(options.appRoot, 'bin')},
             stdio: options.media ? ['pipe', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe']});
         var child = this.child;
+        this.log.info('started; media pipes', child.stdio ? child.stdio.length : 'unavailable');
         child.stdin.on('error', function () { self.fail('helper_input_failed'); });
         // Media pipes outlive each call's RobotMedia: writes still queued when the helper
         // exits fail with EPIPE, which must not become an uncaught error.
@@ -62,7 +65,8 @@ class Supervisor extends events.EventEmitter {
         // Drain diagnostics without retaining text that might contain private data.
         child.stderr.on('data', function () {});
         child.on('error', function () { self.fail('helper_start_failed'); });
-        child.on('exit', function () {
+        child.on('exit', function (code, signal) {
+            self.log.info('exited; code', code, 'signal', signal || 'none');
             if (self.beat !== null) self.timers.clearInterval(self.beat);
             self.beat = null;
             if (self.child === child) self.child = null;
@@ -85,6 +89,7 @@ class Supervisor extends events.EventEmitter {
         catch (_) { this.fail('helper_input_failed'); return false; }
     }
     fail(reason) {
+        this.log.error(reason);
         this.emit('failure', reason);
         this.stop();
     }
