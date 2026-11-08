@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 'use strict';
-// Robot devices for a call, held only while one runs: the microphone (ALSA MediaIn) and
-// speaker (ALSA MediaOut) through gst-launch, and the camera through the native media service's continuous VP8/WebM stream. Media flows over the helper's
+// Robot devices for a call, held only while one runs: the microphone (the local audio service) and
+// speaker (ALSA MediaOut) and microphone conversion through gst-launch, and the camera through the native media service's continuous VP8/WebM stream. Media flows over the helper's
 // private pipes (fd 3 microphone in, 4 audio out, 5 camera in, 6 video out; HELPER.md).
 var events = require('events'), childProcess = require('child_process');
-var createLog = require('./log'), NativeCamera = require('./camera');
+var createLog = require('./log'), NativeCamera = require('./camera'), SocketMicrophone = require('./microphone');
 var CAMERA_FRAME = 12 + 320 * 240 * 3 / 2;
 // Why a device fails is only knowable from these lines (the screen shows one message for
 // every cause), so each stage of opening the devices says what it is doing and how long it took.
@@ -115,14 +115,12 @@ class RobotMedia extends events.EventEmitter {
         });
         listen(helper.stdio[6], 'data', function (bytes) { try { decoder.write(bytes); } catch (error) { self.fail('video pipe from the helper: ' + why(error)); } });
         [3,4,5,6].forEach(function (fd) { listen(helper.stdio[fd], 'error', function (error) { if (!self.closed) self.fail('helper pipe fd ' + fd + ': ' + why(error)); }); });
-        // MediaIn's copy routing selects channel 0 when opened as mono. Select
-        // speech at the native rate before upmixing for the helper; its second
-        // capture channel is a reference signal, not the other half of stereo.
-        var microphone = spawn('gst-launch-1.0', ['-q','alsasrc','device=MediaIn','!',
+        var microphone = spawn('gst-launch-1.0', ['-q','fdsrc','fd=0','blocksize=320','!',
             'audio/x-raw,format=S16LE,layout=interleaved,rate=16000,channels=1','!','audioconvert','!','audioresample','!',
             'audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2','!','fdsink','fd=1','sync=false'],
-            {stdio:['ignore','pipe','pipe']});
-        note('microphone source: MediaIn, mono S16LE 16000 Hz; helper input: stereo S16LE 48000 Hz');
+            {stdio:['pipe','pipe','pipe']});
+        note('microphone source: local processed-audio socket, mono S16LE 16000 Hz; helper input: stereo S16LE 48000 Hz');
+        microphone.stdin.on('error',function (error) { if (!self.closed) self.fail('microphone converter pipe: ' + why(error)); });
         var speaker = spawn('gst-launch-1.0', ['-q','fdsrc','fd=0','blocksize=1920','!',
             'audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2','!','audioconvert','!','audioresample','!',
             'alsasink','device=MediaOut','sync=false'], {stdio:['pipe','ignore','pipe']});
@@ -163,7 +161,17 @@ class RobotMedia extends events.EventEmitter {
             self.cameraReady = true;
         });
         // One device at a time: native startup is not evidence of a decoded frame.
-        return within('microphone', function (done) { microphone.stdout.once('data', done); }).then(function () {
+        return within('microphone', function (done) {
+            microphone.stdout.once('data', done);
+            try {
+                var Microphone = self.options.microphone || SocketMicrophone;
+                self.microphoneSource = new Microphone(self.jibo, {log:self.log});
+                self.microphoneSource.on('failure', function (error) { if (!self.closed) self.fail('microphone source: ' + why(error)); });
+                self.microphoneSource.start(microphone.stdin).catch(function (error) {
+                    if (!self.closed) self.fail('microphone preparation: ' + why(error));
+                });
+            } catch (error) { self.fail('microphone preparation: ' + why(error)); }
+        }).then(function () {
             if (self.closed) throw Error('media_closed');
             return within('camera', function (done) {
                 // Probe and release before declaring media ready. Enabling the call's
@@ -216,7 +224,8 @@ class RobotMedia extends events.EventEmitter {
         (this.listeners || []).splice(0).forEach(function (l) { l[0].removeListener(l[1], l[2]); });
         var children = this.children.splice(0);
         var cameraStop = this.cameraSource ? this.cameraSource.stop() : Promise.resolve();
-        this.stopping = Promise.all([cameraStop].concat(children.map(function (child) { return new Promise(function (resolve,reject) {
+        var microphoneStop = this.microphoneSource ? this.microphoneSource.stop() : Promise.resolve();
+        this.stopping = Promise.all([cameraStop,microphoneStop].concat(children.map(function (child) { return new Promise(function (resolve,reject) {
             if (child.exitCode !== null && child.exitCode !== undefined) return resolve();
             var timer = setTimeout(function () { child.kill('SIGKILL'); },1000);
             var deadline = setTimeout(function () { reject(Error('media_cleanup_timeout')); },2000);
