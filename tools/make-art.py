@@ -5,7 +5,6 @@ Classic glyphs are flat white with a little dark-navy detail and a soft long sha
 toward the lower right (jibo-ui-classic tokens, iconography.style). Writes:
 
   icon.png                              330x330 store and main-menu glyph (BEacon tints the tile)
-  banner.png                            1000x800 store banner: the glyph on its menu tile
   telejibo/resources/icons/video.png    265x265 action-button icon (camera toggle)
   telejibo/resources/icons/settings.png 265x265 action-button icon (settings)
 
@@ -123,9 +122,9 @@ def long_shadow(alpha, length, strength):
     return shadow
 
 
-def icon(width, height, glyph, box, centre, shadow_length, shadow_strength=0.18):
+def icon(width, height, glyph, box, centre, shadow_length, shadow_strength=0.18, anchor=(12, 12)):
     scale = box / 24
-    alpha, colour = raster(width, height, glyph, scale, (centre[0] - box / 2, centre[1] - box / 2))
+    alpha, colour = raster(width, height, glyph, scale, (centre[0] - anchor[0] * scale, centre[1] - anchor[1] * scale))
     shadow = long_shadow(alpha, shadow_length, shadow_strength)
     pixels = []
     for y in range(height):
@@ -180,15 +179,14 @@ def main():
     only = set(sys.argv[1:])
     def wanted(name):
         return not only or name in only
-    # App glyph: about 180 px wide, optical centre slightly above the middle (tokens: appIcon).
-    glyph = icon(330, 330, camera(), 196, (165, 160), 62)
+    # Centre the camera's solid silhouette, excluding its decorative shadow.
+    # Its asymmetric lens puts the area centroid at (11.18, 12) in glyph units.
+    glyph = icon(330, 330, camera(), 196, (165, 165), 62, anchor=(11.18, 12))
     if wanted('icon'):
         write('icon.png', 330, 330, glyph)
-    if wanted('banner'):
-        write('banner.png', 1000, 800, tile(1000, 800, 420, 64, glyph, 330))
     # Action icons: about 130 px drawing box on the stock 265 px canvas.
     if wanted('video'):
-        write('telejibo/resources/icons/video.png', 265, 265, icon(265, 265, camera(), 138, (132, 132), 58))
+        write('telejibo/resources/icons/video.png', 265, 265, icon(265, 265, camera(), 138, (132.5, 132.5), 58, anchor=(11.18, 12)))
     if wanted('settings'):
         write('telejibo/resources/icons/settings.png', 265, 265, icon(265, 265, cog(), 128, (132, 132), 60))
 

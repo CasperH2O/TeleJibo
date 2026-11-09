@@ -25,7 +25,7 @@ var screen = {width: 1280, height: 720, margin: 52, corner: 54, minText: 30};
 // UI copy. Telegram terms: the app title must not contain "Telegram"; only the sign-in
 // steps name the service, because the person has to find it on their phone.
 var text = {
-    title: 'TeleJibo', connecting: 'Connecting…', signedOut: 'Signed out',
+    title: 'TeleJibo', connecting: 'Connecting…', closing: 'Closing…', signedOut: 'Signed out',
     videoCall: 'Video call', noCalls: 'No calls', online: 'Online', missed: 'Missed call',
     incoming: 'Incoming video call', outgoing: 'Calling…', decline: 'Decline', accept: 'Answer', cancel: 'Cancel',
     mute: 'Mute', unmute: 'Unmute', micOff: 'Mic off', camera: 'Camera', tracking: 'Look at me', end: 'End', cameraOff: 'Camera off',
@@ -46,7 +46,7 @@ var header = {title: {x: 640, y: 68, size: 60}, settings: {x: 1092, y: 56, size:
 // so the most recent conversations sit at the top left.
 var contacts = {
     perPage: 6, columns: 3, rows: 2, x: 112, y: 132, width: 330, height: 243, columnGap: 32.5, rowGap: 24,
-    avatar: {size: 136, top: 8, initials: 56}, name: {y: 176, size: 45}, sub: {y: 222, size: 30},
+    avatar: {size: 136, top: 8, initials: 56}, name: {y: 176, size: 45},
     // A drag past `flip` px turns one page (stock List.PAN_THRESHOLD); `slop` is the tap threshold.
     flip: 150, slop: 30, resistance: 0.3, stretch: 120,
     // Near-critical: a page flip settles in about 25 steps of 1/60 s without overshoot.

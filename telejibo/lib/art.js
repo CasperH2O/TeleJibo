@@ -46,7 +46,6 @@ module.exports = function createArt(PIXI, document) {
                 ctx.fillStyle = c.surface;
                 ctx.beginPath(); ctx.arc(t.width / 2, a.top + a.size / 2, a.size / 2, 0, Math.PI * 2); ctx.fill();
                 rounded(ctx, t.width / 2 - 100, t.name.y - 18, 200, 36, 18); ctx.fill();
-                rounded(ctx, t.width / 2 - 65, t.sub.y - 12, 130, 24, 12); ctx.fill();
             });
         },
         // Numbered step, as in the stock setup screens.

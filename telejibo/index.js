@@ -67,7 +67,11 @@ function prepareMedia() {
     current.on('unavailable', function () {
         if (media !== current) return;
         releaseMedia();
-        if (skill) { skill.message = layout.text.mediaStopped; skill.render(); }
+        if (skill) {
+            log.error('call media stopped');
+            if (skill.call) controller.hangup(skill.call.call_id);
+            skill.render();
+        }
     });
     mediaStarting = current.start(supervisor.child).then(function () {
         if (media !== current) throw Error('media_closed');

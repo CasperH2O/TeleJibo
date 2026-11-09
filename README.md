@@ -1,10 +1,11 @@
 # TeleJibo
 
-One-to-one Telegram video calls on Jibo, in Jibo's own classic look. Link your Telegram account once by scanning a code, then tap a contact to call, or answer when someone calls while TeleJibo is open. Swipe down to exit.
+Bring a familiar face to Jibo. TeleJibo puts your Telegram video calls on
+Jibo's screen, with a swipeable contact list, simple call controls and head
+tracking that follows you as you move. Link your account by scanning a code,
+then tap a contact to call or answer a friend while TeleJibo is open.
 
-TeleJibo is an unofficial Telegram client for BE robots (BEam 3.1.7 or newer).
-It is a development release. It has been exercised in the Jibo web simulator,
-not yet on a physical Jibo.
+![TeleJibo contact list and video call, illustrated with fictional demo contacts](banner.png)
 
 ## Using it
 
@@ -17,8 +18,9 @@ not yet on a physical Jibo.
    password are asked for it on Jibo's keyboard.
 3. Your contacts appear, most recent conversations first. Swipe sideways for
    more. Tap someone to call them.
-4. During a call: **Mute**, **Camera** (each call starts with Jibo's camera
-   off), **Look at me** (Jibo turns to follow your face) and **End**.
+4. During a call: **Camera**, **Look at me** (Jibo turns to follow your face)
+   and **End**. Camera and head tracking start on when the call connects;
+   **Mic off** indicates that microphone capture is disabled in this build.
 5. **Settings** (top right) signs the robot out of Telegram.
 
 Calls only come in while TeleJibo is open. During a call TeleJibo asks Jibo not
@@ -29,33 +31,7 @@ to switch to another skill.
 TeleJibo runs on the robot and talks only to Telegram. Your session is stored
 encrypted in Jibo's private storage
 (`/opt/jibo/Knowledge/beacon/custom-skills/telejibo/account`) and is removed by
-**Sign out**. Calls are not recorded. The microphone, speaker and camera are
-held only during a call. Like every BEacon custom skill, TeleJibo runs code on
+**Sign out**. Calls are not recorded. The speaker and camera are
+opened only to prepare or run a call; microphone capture stays disabled in this
+build. Like every BEacon custom skill, TeleJibo runs code on
 your robot; install it only from a source you trust.
-
-Telegram identifies apps by an API id. Releases carry the publisher's id in a
-scrambled form; it is not a secret and gives no access to anyone's account.
-To use your own, place `{"api_id": 123, "api_hash": "…"}` in
-`api.override.json` beside the account folder. TeleJibo copies it into its own
-private key file (`api.json`, mode 0600) each time it starts, so the override
-needs no special permissions.
-
-## How it works
-
-- `telejibo/`: the BEam asset-pack skill. `lib/screen.js` is the face UI, built
-  from the SDK's stock Labels and ActionButtons (`lib/layout.js` holds the
-  classic design tokens and geometry); `lib/helper.js` supervises the Telegram
-  helper over private JSON-line pipes; `lib/media.js` connects the microphone
-  (ALSA `MediaIn`) and speaker (`MediaOut`) through GStreamer and the camera
-  through the LPS media service's preview.
-- `helper/`: the Telegram helper (`bin/telegram-helper`), an ARMv7 program built
-  with TDLib and tgcalls: its C++ source (`helper/media/`), pinned dependencies
-  and the complete build tooling. See [helper/README.md](helper/README.md).
-- `tools/package.py`: builds the store ZIP; `tools/make-art.py`: the icons.
-
-See [docs/BUILD.md](docs/BUILD.md) to build, test and release.
-
-## License
-
-[GPL-3.0-or-later](LICENSE.md). Third-party components keep their own terms:
-[THIRD_PARTY.md](THIRD_PARTY.md).

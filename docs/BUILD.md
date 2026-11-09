@@ -36,10 +36,12 @@ that record, or one built from older helper source than the tree it packages.
 ## Artwork
 
 ```sh
-python3 tools/make-art.py            # icon.png, banner.png, telejibo/resources/icons/*.png
+python3 tools/make-art.py            # icon.png, telejibo/resources/icons/*.png
 ```
 
-Deterministic; commit the PNGs it writes.
+Deterministic; commit the PNGs it writes. The store's `banner.png` is a separate
+composition of the contact list and a demo video call, with fictional contacts.
+Keep its 16:9 aspect ratio for the Store's banner crop.
 
 ## Package
 
