@@ -1,6 +1,6 @@
 {
   "name": "TeleJibo",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "supported": "3.1.7",
   "type": "skill",
   "themes": false,

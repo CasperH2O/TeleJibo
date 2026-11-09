@@ -1,34 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 'use strict';
-// Robot devices for a call, held only while one runs: the microphone (the local audio service) and
-// speaker (ALSA MediaOut) and microphone conversion through gst-launch, and the camera through the native media service's continuous VP8/WebM stream. Media flows over the helper's
+// Robot devices for a call: optional microphone conversion, MediaOut playback,
+// and temporary camera previews decoded to I420. Media flows over the helper's
 // private pipes (fd 3 microphone in, 4 audio out, 5 camera in, 6 video out; HELPER.md).
 var events = require('events'), childProcess = require('child_process');
-var createLog = require('./log'), NativeCamera = require('./camera'), SocketMicrophone = require('./microphone');
+var createLog = require('./log'), PhotoCamera = require('./photo-camera'), SocketMicrophone = require('./microphone');
 var CAMERA_FRAME = 12 + 320 * 240 * 3 / 2;
 // Why a device fails is only knowable from these lines (the screen shows one message for
 // every cause), so each stage of opening the devices says what it is doing and how long it took.
 function why(error) { return error ? (error.code ? error.code + ': ' : '') + (error.message || String(error)) : 'unknown'; }
 function queued(stream) { return typeof stream.writableLength === 'number' ? stream.writableLength : stream._writableState && stream._writableState.length || 0; }
 
-function toI420(rgba, width, height) {
-    var size = width * height, bytes = Buffer.alloc(size * 3 / 2);
-    for (var y = 0; y < height; ++y) for (var x = 0; x < width; ++x) {
-        var at = (y * width + x) * 4, r = rgba[at], g = rgba[at + 1], b = rgba[at + 2];
-        bytes[y * width + x] = Math.max(16, Math.min(235, ((66*r + 129*g + 25*b + 128) >> 8) + 16));
-        if (!(x & 1) && !(y & 1)) {
-            var red = 0, green = 0, blue = 0;
-            for (var row = 0; row < 2; ++row) for (var col = 0; col < 2; ++col) {
-                var p = ((y + row) * width + x + col) * 4; red += rgba[p]; green += rgba[p+1]; blue += rgba[p+2];
-            }
-            red /= 4; green /= 4; blue /= 4;
-            var uv = y / 2 * (width / 2) + x / 2;
-            bytes[size + uv] = Math.max(16, Math.min(240, ((-38*red - 74*green + 112*blue + 128) >> 8) + 128));
-            bytes[size + size / 4 + uv] = Math.max(16, Math.min(240, ((112*red - 94*green - 18*blue + 128) >> 8) + 128));
-        }
-    }
-    return bytes;
-}
+var toI420 = require('./pixels');
 // Camera input frame: `JICF`, little-endian uint32 width and height, then I420 (HELPER.md).
 // The header lets the helper find the next whole frame after any partial one.
 function cameraFrame(i420, width, height) {
@@ -156,9 +139,9 @@ class RobotMedia extends events.EventEmitter {
             // A stalled speaker drops decoded audio; device loss is reported by exit.
             if (!self.closed && queued(speaker.stdin) < 38400) speaker.stdin.write(bytes);
         });
-        var Camera = this.options.camera || NativeCamera;
+        var Camera = this.options.camera || PhotoCamera;
         this.cameraSource = new Camera(this.jibo, {spawn: spawn, log: this.log, timeoutMs: limit});
-        this.cameraSource.on('failure', function (error) { if (!self.closed) self.fail('native camera: ' + why(error)); });
+        this.cameraSource.on('failure', function (error) { if (!self.closed) self.fail('camera: ' + why(error)); });
         this.cameraSource.on('frame', function (bytes) {
             if (self.closed) return;
             if (self.jibo.privacyController && self.jibo.privacyController.enabled) { self.fail('privacy_enabled'); return; }
@@ -170,7 +153,7 @@ class RobotMedia extends events.EventEmitter {
             }
             self.cameraReady = true;
         });
-        // One device at a time: native startup is not evidence of a decoded frame.
+        // One device at a time: a successful request is not a decoded frame.
         var microphoneReady = microphone ? within('microphone', function (done) {
             microphone.stdout.once('data', done);
             try {
@@ -187,7 +170,7 @@ class RobotMedia extends events.EventEmitter {
             if (self.jibo.privacyController && self.jibo.privacyController.enabled) throw Error('privacy_enabled');
             return within('camera', function (done) {
                 // Probe and release before declaring media ready. Enabling the call's
-                // camera starts a fresh stream; camera-off keeps the sensor released.
+                // camera starts fresh capture; camera-off cancels preview requests.
                 self.cameraSource.start().then(function () { return self.cameraSource.stop(); }).then(done, function (error) {
                     if (!self.closed) self.fail('camera preparation: ' + why(error));
                 });

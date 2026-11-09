@@ -1,6 +1,6 @@
 {
   "name": "@be/telejibo",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "One-to-one Telegram video calls on Jibo (unofficial). Swipe down to exit.",
   "main": "index.js",
   "config": {
