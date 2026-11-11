@@ -308,8 +308,9 @@ function fakeDevices() {
         stop() { this.stopped++; return Promise.resolve(); }
     }
     class Microphone extends EventEmitter {
-        constructor() { super(); this.stopped = 0; microphones.push(this); }
-        start() { return Promise.resolve(); }
+        constructor(_jibo, options) { super(); this.stopped = 0; this.options = options; microphones.push(this); }
+        start(destination) { this.destination = destination; return Promise.resolve(); }
+        feed(bytes) { if (this.options.active()) this.destination.write(bytes); }
         stop() { this.stopped++; return Promise.resolve(); }
     }
     return {children, cameras, camera: Camera, microphones, microphone: Microphone, writes, helper, spawn, jibo, canvas};
@@ -335,7 +336,7 @@ test('media: a device that fails at once rejects start immediately, not after th
         const outcome = await Promise.race([started.then(() => 'started', (e) => e.message), tick(500).then(() => 'still waiting')]);
         assert.equal(outcome, 'media_unavailable');
         assert.equal(unavailable, 1);
-        assert.ok(d.children[1].killed.includes('SIGTERM'));
+        assert.ok(d.microphones[0].stopped >= 1);
     });
 });
 
@@ -344,8 +345,9 @@ test('media: start, framed camera only during a call with the camera on, clean s
     return withBrowserGlobals(d.canvas, async () => {
         const media = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, microphone: d.microphone, timeoutMs: 60000});
         const started = media.start(d.helper);
-        d.children[0].stdout.emit('data', Buffer.alloc(1920));
         assert.equal(await Promise.race([started, tick(1000).then(() => 'timeout')]), true);
+        assert.equal(d.children.length, 1, 'only the speaker is a separate process');
+        d.microphones[0].feed(Buffer.alloc(1920));
         assert.equal(d.writes[3].length, 0, 'no microphone audio outside a call');
         assert.equal(d.writes[5].length, 0, 'the readiness probe sends no frame');
         media.setCallActive(true); media.setCamera(true);
@@ -353,7 +355,7 @@ test('media: start, framed camera only during a call with the camera on, clean s
         assert.equal(d.writes[5].length, 1);
         assert.equal(d.writes[5][0].toString('ascii', 0, 4), 'JICF');
         assert.equal(d.writes[5][0].length, 12 + 320 * 240 * 3 / 2);
-        d.children[0].stdout.emit('data', Buffer.alloc(1920));
+        d.microphones[0].feed(Buffer.alloc(1920));
         assert.equal(d.writes[3].length, 1);
         media.setCallActive(false);
         await media.cameraTransition;
@@ -377,7 +379,7 @@ test('media: stop during start rejects at once, and a speaker EPIPE is not uncau
         const again = new RobotMedia(d.jibo, {spawn: d.spawn, camera: d.camera, microphone: d.microphone, timeoutMs: 60000});
         let unavailable = 0; again.on('unavailable', () => ++unavailable);
         const second = again.start(d.helper).catch((e) => e.message);
-        d.children[3].stdin.emit('error', Object.assign(Error('EPIPE'), {code: 'EPIPE'}));
+        d.children[1].stdin.emit('error', Object.assign(Error('EPIPE'), {code: 'EPIPE'}));
         assert.equal(unavailable, 1);
         assert.equal(await second, 'media_unavailable');
     });
@@ -502,7 +504,7 @@ test('controller: an override key is copied into the private api.json', () => {
 test('controller: media is held only for a call, and hangup stops the camera at once', async () => {
     const {controller, supervisor, medias} = openController();
     await controller.prepareMedia();
-    assert.equal(medias[0].options.captureMicrophone, false, 'video-test controller disables microphone capture');
+    assert.notEqual(medias[0].options.captureMicrophone, false, 'the call uses the microphone');
     assert.deepEqual(supervisor.sent.at(-1), {method: 'media.ready', enabled: true});
     supervisor.emit('status', {event: 'call', call_id: 5, state: 'callStateReady'});
     assert.equal(medias[0].callActive, true);
@@ -553,12 +555,12 @@ test('controller retains failed native cleanup and retries it before opening new
     await controller.close();
 });
 
-test('media: microphone converter EPIPE releases the socket subscription and both children', () => {
+test('media: a broken microphone pipe to the helper releases the microphone and the speaker', () => {
     const d = fakeDevices();
     return withBrowserGlobals(d.canvas, async () => {
         const media = new RobotMedia(d.jibo, {spawn:d.spawn,camera:d.camera,microphone:d.microphone});
         const started = media.start(d.helper).catch(error => error.message);
-        assert.doesNotThrow(() => d.children[0].stdin.emit('error',Error('EPIPE')));
+        assert.doesNotThrow(() => d.helper.stdio[3].emit('error',Error('EPIPE')));
         assert.equal(await started,'media_unavailable');
         assert.ok(d.microphones[0].stopped >= 1);
         assert.ok(d.children.every(child => child.killed.includes('SIGTERM')));

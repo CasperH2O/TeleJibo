@@ -1,173 +1,112 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 'use strict';
-// Candidate adapter for the existing local processed-audio service. No ALSA open,
-// recording, service start, mixer change, or global listening-mode change.
-var EventEmitter = require('events'), http = require('http');
+// The live microphone for a call, from BEam 3.1.9's jibo.media.getUserMedia({audio: true}).
+// Jibo keeps listening for "Hey Jibo" alongside it. The track's samples are read in the
+// page and written to the helper as S16LE stereo 48 kHz (HELPER.md, fd 3). Nothing is
+// recorded or stored, and no ALSA device, mixer or listening mode is touched.
+// Runs on the robot's Node 6 / Chrome 53: ES2015 only.
+var EventEmitter = require('events');
+
+var RATE = 48000, BLOCK = 2048;
+// At most 100 ms waits in the helper's pipe; beyond that whole blocks are dropped.
+var QUEUE_LIMIT = 38400;
 function queued(stream) { return typeof stream.writableLength === 'number' ? stream.writableLength : stream._writableState && stream._writableState.length || 0; }
-function speechPlane(data) {
-    var bytes;
-    if (Buffer.isBuffer(data)) bytes = data;
-    else if (Object.prototype.toString.call(data) === '[object ArrayBuffer]') bytes = Buffer.from(new Uint8Array(data));
-    else throw Error('microphone_message_not_binary');
-    // Two S16LE planes, each at most 100 ms at 16 kHz. WebSocket message
-    // boundaries, rather than TCP chunks, delimit the pair of planes.
-    if (!bytes.length || bytes.length % 4 || bytes.length > 6400) throw Error('microphone_message_size_' + bytes.length);
-    return bytes.slice(0,bytes.length / 2);
+
+// Mono float samples at `rate` to interleaved S16LE stereo at 48 kHz. `state` carries the
+// read position and the last sample across blocks, so block edges make no click.
+function pcm(samples, rate, state) {
+    var step = rate / RATE, position = state.position || 0, last = state.last || 0, count = 0;
+    for (var p = position; p < samples.length; p += step) ++count;
+    var out = Buffer.alloc(count * 4), at = 0;
+    for (; position < samples.length; position += step) {
+        var index = Math.floor(position), fraction = position - index;
+        // Sample -1 is the previous block's last one.
+        var a = index > 0 ? samples[index - 1] : last, b = samples[index];
+        var value = Math.max(-1, Math.min(1, a + (b - a) * fraction));
+        var word = Math.round(value * 32767);
+        out.writeInt16LE(word, at); out.writeInt16LE(word, at + 2); at += 4;
+    }
+    state.position = position - samples.length;
+    if (samples.length) state.last = samples[samples.length - 1];
+    return out;
 }
-function captureMuted(mixer) {
-    var muted = false;
-    ['master','media'].forEach(function (name) {
-        var value = mixer && mixer[name];
-        if (!value || typeof value.mute !== 'boolean' || typeof value.recordVolume !== 'number' ||
-            !isFinite(value.recordVolume) || value.recordVolume < 0 || value.recordVolume > 1)
-            throw Error('microphone_mixer_state');
-        if (value.mute || value.recordVolume === 0) muted = true;
-    });
-    return muted;
-}
-class SocketMicrophone extends EventEmitter {
+
+class PageMicrophone extends EventEmitter {
+    // options.active(): whether a call wants the audio now; outside a call it is discarded.
     constructor(jibo, options) {
         super(); this.jibo = jibo; this.options = options || {};
-        var records = jibo.records || [], record = records.filter(function (r) { return r.name === 'audio'; })[0];
-        var port = record ? Number(record.port) : 8383;
-        if (!isFinite(port) || port < 1 || port > 65535 || Math.floor(port) !== port) throw Error('microphone_service_address');
-        // Audio is an on-robot service. Use its registered port on loopback.
-        this.url = 'ws://127.0.0.1:' + port + '/sout';
-        this.socket = null; this.closed = true; this.stopping = null; this.port = port;
-        this.mixerTimer = null; this.mixerRequest = null; this.captureState = null; this.stateAt = 0;
-        this.deadline = null; this.stall = null; this.cancelStart = null;
-        this.received = 0; this.dropped = 0; this.generation = 0;
+        this.closed = true; this.stream = null; this.context = null; this.source = null; this.processor = null;
+        this.deadline = null; this.cancelStart = null; this.generation = 0;
+        this.sent = 0; this.dropped = 0;
     }
     isPrivate() { return !!(this.jibo.privacyController && this.jibo.privacyController.enabled); }
-    readMixer() {
-        if (this.options.readMixer) return this.options.readMixer();
-        var self = this;
-        return new Promise(function (resolve,reject) {
-            var body = '', settled = false, timer;
-            function finish(error, value) {
-                if (settled) return; settled = true; clearTimeout(timer);
-                if (self.mixerRequest === request) self.mixerRequest = null;
-                if (error) reject(error); else resolve(value);
-            }
-            var request = self.mixerRequest = http.get({hostname:'127.0.0.1',port:self.port,path:'/mixer'},function (response) {
-                if (response.statusCode !== 200) { response.resume(); finish(Error('microphone_mixer_http_' + response.statusCode)); return; }
-                response.on('data',function (bytes) {
-                    body += String(bytes);
-                    if (body.length > 16384) { finish(Error('microphone_mixer_size')); request.abort(); }
-                });
-                response.on('error',function (error) { finish(error); });
-                response.on('end',function () {
-                    try { finish(null,JSON.parse(body)); } catch (_) { finish(Error('microphone_mixer_json')); }
-                });
-            });
-            request.on('error',function (error) { finish(error); });
-            timer = setTimeout(function () { finish(Error('microphone_mixer_timeout')); request.abort(); },1000);
-        });
-    }
+    note(text) { if (this.options.log) this.options.log.info(text); }
     start(destination) {
-        var self = this;
-        if (!this.closed || this.socket) return Promise.reject(Error('microphone_already_started'));
+        var self = this, options = this.options;
+        if (!this.closed) return Promise.reject(Error('microphone_already_started'));
         if (this.isPrivate()) return Promise.reject(Error('microphone_privacy'));
-        this.closed = false; this.stopping = null; this.received = 0; this.dropped = 0;
-        var generation = ++this.generation; this.captureState = null; this.stateAt = 0;
-        return new Promise(function (resolve,reject) {
+        var getUserMedia = options.getUserMedia || (this.jibo.media && typeof this.jibo.media.getUserMedia === 'function' ?
+            function (constraints) { return self.jibo.media.getUserMedia(constraints); } : null);
+        var Context = options.AudioContext || (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext));
+        if (!getUserMedia || !Context) return Promise.reject(Error('microphone_api_unavailable'));
+        this.closed = false; this.sent = 0; this.dropped = 0;
+        var generation = ++this.generation;
+        return new Promise(function (resolve, reject) {
             var ready = false, failed = false;
+            function current() { return !self.closed && generation === self.generation; }
             function fail(error) {
-                if (self.closed || failed || generation !== self.generation) return;
-                failed = true; clearTimeout(self.deadline); clearTimeout(self.stall);
-                self.cancelStart = null;
+                if (!current() || failed) return;
+                failed = true; self.cancelStart = null;
+                self.stop();
                 if (!ready) reject(error);
-                self.stop().catch(function (cleanup) { if (self.options.log) self.options.log.warn('microphone cleanup failed: ' + cleanup.message); });
                 self.emit('failure', error);
             }
-            function pollMixer() {
-                if (self.closed || generation !== self.generation) return;
-                Promise.resolve().then(function () {
-                    if (self.closed || generation !== self.generation) return null;
-                    return self.readMixer();
-                }).then(function (mixer) {
-                    if (self.closed || generation !== self.generation) return;
-                    try {
-                        var muted = captureMuted(mixer);
-                        if (self.options.log && (!self.captureState || self.captureState.muted !== muted))
-                            self.options.log.info('microphone capture ' + (muted ? 'muted by existing system controls' : 'enabled by existing system controls'));
-                        self.captureState = {muted:muted}; self.stateAt = Date.now();
-                        self.mixerTimer = setTimeout(pollMixer,250);
-                    } catch (error) { fail(error); }
-                },fail);
-            }
-            pollMixer();
-            self.cancelStart = function () { if (!ready) reject(Error('microphone_closed')); self.cancelStart = null; };
-            self.deadline = setTimeout(function () { fail(Error('microphone_no_frames')); }, self.options.timeoutMs || 5000);
-            try {
-                var Socket = self.options.WebSocket || (typeof window !== 'undefined' && window.WebSocket);
-                if (!Socket) throw Error('microphone_websocket_unavailable');
-                var socket = self.socket = new Socket(self.url);
-                socket.binaryType = 'arraybuffer';
-                socket.onopen = function () {
-                    if (self.closed || self.socket !== socket) return;
-                    if (self.options.log) self.options.log.info('microphone service connected: ' + self.url + '; waiting for PCM');
-                };
-                socket.onmessage = function (event) {
-                    if (self.closed || failed || self.socket !== socket) return;
+            self.cancelStart = function () { if (!ready) reject(Error('microphone_closed')); };
+            self.deadline = setTimeout(function () { fail(Error('microphone_no_frames')); }, options.timeoutMs || 5000);
+            Promise.resolve().then(function () { return getUserMedia({audio: true}); }).then(function (stream) {
+                if (!current()) { stream.getTracks().forEach(function (track) { track.stop(); }); return; }
+                self.stream = stream;
+                var context = self.context = new Context(), state = {};
+                var source = self.source = context.createMediaStreamSource(stream);
+                // A processor only runs while connected to the output; it writes silence there.
+                var processor = self.processor = context.createScriptProcessor(BLOCK, 1, 1);
+                self.note('microphone: live track at ' + context.sampleRate + ' Hz; helper input: stereo S16LE ' + RATE + ' Hz');
+                processor.onaudioprocess = function (event) {
+                    if (!current() || failed) return;
                     if (self.isPrivate()) return fail(Error('microphone_privacy'));
-                    var speech;
-                    try { speech = speechPlane(event.data); }
-                    catch (error) { fail(error); return; }
-                    clearTimeout(self.stall);
-                    self.stall = setTimeout(function () { fail(Error('microphone_stalled')); }, self.options.stallMs || 5000);
-                    self.received++;
-                    // This feed precedes soft-volume routing. Until current capture
-                    // controls are known, drain without forwarding. A mute or stale
-                    // state supplies silence, preserving the converter's PCM clock.
-                    if (!self.captureState) return;
-                    if (self.captureState.muted || Date.now() - self.stateAt > 750) speech = Buffer.alloc(speech.length);
-                    // Keep draining the service regardless of downstream congestion.
-                    // Each dropped unit is a whole mono block, preserving PCM alignment.
+                    var bytes = pcm(event.inputBuffer.getChannelData(0), context.sampleRate, state);
                     try {
-                        if (queued(destination) + speech.length <= 3200) destination.write(speech);
-                        else self.dropped++;
-                    } catch (error) { fail(error); return; }
+                        if (!options.active || options.active()) {
+                            if (queued(destination) + bytes.length <= QUEUE_LIMIT) { destination.write(bytes); self.sent++; }
+                            else self.dropped++;
+                        }
+                    } catch (error) { return fail(error); }
                     if (!ready) {
                         ready = true; clearTimeout(self.deadline); self.cancelStart = null;
-                        if (self.options.log) self.options.log.info('microphone service: first planar PCM message (' + speech.length * 2 + ' bytes), speech mono S16LE 16000 Hz');
+                        self.note('microphone: first audio block (' + bytes.length + ' bytes)');
                         resolve();
                     }
                 };
-                socket.onerror = function () { fail(Error('microphone_socket_error')); };
-                socket.onclose = function () { fail(Error('microphone_socket_closed')); };
-            } catch (error) { fail(error); }
+                stream.getTracks().forEach(function (track) { track.onended = function () { fail(Error('microphone_track_ended')); }; });
+                source.connect(processor); processor.connect(context.destination);
+            }).catch(function (error) { fail(error instanceof Error ? error : Error('microphone_refused')); });
         });
     }
     stop() {
-        var self = this; this.closed = true;
-        clearTimeout(this.deadline); clearTimeout(this.stall); clearTimeout(this.mixerTimer);
-        if (this.mixerRequest) { this.mixerRequest.abort(); this.mixerRequest = null; }
-        if (this.cancelStart) this.cancelStart();
-        if (this.stopping) return this.stopping;
-        var socket = this.socket;
-        if (!socket) return Promise.resolve();
-        this.stopping = new Promise(function (resolve,reject) {
-            var deadline, settled = false;
-            function done(error) {
-                if (settled) return; settled = true;
-                clearTimeout(deadline);
-                socket.onopen = socket.onmessage = socket.onclose = null;
-                socket.onerror = function () {};
-                if (error) reject(error);
-                else { if (self.socket === socket) self.socket = null; resolve(); }
-            }
-            // Stop forwarding synchronously before requesting the close handshake.
-            socket.onmessage = socket.onopen = null;
-            socket.onerror = function () {};
-            socket.onclose = function () { done(); };
-            if (socket.readyState === 3) return done();
-            deadline = setTimeout(function () { done(Error('microphone_cleanup_timeout')); }, 2000);
-            try { socket.close(); } catch (error) { done(error); }
-        }).then(function () { self.stopping = null; },function (error) { self.stopping = null; throw error; });
-        return this.stopping;
+        this.closed = true;
+        clearTimeout(this.deadline);
+        var cancel = this.cancelStart; this.cancelStart = null;
+        if (cancel) cancel();
+        var stream = this.stream, context = this.context, source = this.source, processor = this.processor;
+        this.stream = this.context = this.source = this.processor = null;
+        if (processor) { processor.onaudioprocess = null; try { processor.disconnect(); } catch (_) {} }
+        if (source) try { source.disconnect(); } catch (_) {}
+        if (stream) stream.getTracks().forEach(function (track) { track.onended = null; try { track.stop(); } catch (_) {} });
+        if (context && typeof context.close === 'function') try { var closed = context.close(); if (closed && closed.catch) closed.catch(function () {}); } catch (_) {}
+        return Promise.resolve();
     }
 }
-module.exports = SocketMicrophone;
-module.exports.speechPlane = speechPlane;
-module.exports.captureMuted = captureMuted;
+module.exports = PageMicrophone;
+module.exports.pcm = pcm;
+module.exports.RATE = RATE;
+module.exports.QUEUE_LIMIT = QUEUE_LIMIT;

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 'use strict';
-// Robot devices for a call: optional microphone conversion, MediaOut playback,
+// Robot devices for a call: the live microphone, MediaOut playback,
 // and temporary camera previews decoded to I420. Media flows over the helper's
 // private pipes (fd 3 microphone in, 4 audio out, 5 camera in, 6 video out; HELPER.md).
 var events = require('events'), childProcess = require('child_process');
-var createLog = require('./log'), PhotoCamera = require('./photo-camera'), SocketMicrophone = require('./microphone');
+var createLog = require('./log'), PhotoCamera = require('./photo-camera'), PageMicrophone = require('./microphone');
 var CAMERA_FRAME = 12 + 320 * 240 * 3 / 2;
 // Why a device fails is only knowable from these lines (the screen shows one message for
 // every cause), so each stage of opening the devices says what it is doing and how long it took.
@@ -99,41 +99,23 @@ class RobotMedia extends events.EventEmitter {
         });
         listen(helper.stdio[6], 'data', function (bytes) { try { decoder.write(bytes); } catch (error) { self.fail('video pipe from the helper: ' + why(error)); } });
         [3,4,5,6].forEach(function (fd) { listen(helper.stdio[fd], 'error', function (error) { if (!self.closed) self.fail('helper pipe fd ' + fd + ': ' + why(error)); }); });
-        var microphone = null;
-        if (this.options.captureMicrophone !== false) {
-            microphone = spawn('gst-launch-1.0', ['-q','fdsrc','fd=0','blocksize=320','!',
-                'audio/x-raw,format=S16LE,layout=interleaved,rate=16000,channels=1','!','audioconvert','!','audioresample','!',
-                'audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2','!','fdsink','fd=1','sync=false'],
-                {stdio:['pipe','pipe','pipe']});
-            note('microphone source: local processed-audio socket, mono S16LE 16000 Hz; helper input: stereo S16LE 48000 Hz');
-            microphone.stdin.on('error',function (error) { if (!self.closed) self.fail('microphone converter pipe: ' + why(error)); });
-        } else {
-            // Keep fd 3 open and empty: the native recorder already supplies silence
-            // when no microphone samples are available. Camera input stays real.
-            note('video test: microphone capture disabled; helper supplies silence');
-        }
+        // Without capture, fd 3 stays open and empty and the helper supplies silence.
+        var capture = this.options.captureMicrophone !== false;
+        if (!capture) note('microphone capture disabled; helper supplies silence');
         var speaker = spawn('gst-launch-1.0', ['-q','fdsrc','fd=0','blocksize=1920','!',
             'audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2','!','audioconvert','!','audioresample','!',
             'alsasink','device=MediaOut','sync=false'], {stdio:['pipe','ignore','pipe']});
         // Writes to a speaker that has just exited fail with EPIPE before its exit arrives.
         speaker.stdin.on('error',function (error) { if (!self.closed) self.fail('speaker pipe: ' + why(error)); });
-        this.children = microphone ? [microphone,speaker] : [speaker];
-        [['microphone',microphone],['speaker',speaker]].forEach(function (entry) {
+        this.children = [speaker];
+        [['speaker',speaker]].forEach(function (entry) {
             var name = entry[0], child = entry[1], said = '';
-            if (!child) return;
             note(name + ' pipeline started (pid ' + child.pid + ')');
             child.on('error',function (error) { if (!self.closed) self.fail(name + ' pipeline error: ' + why(error)); });
             child.on('exit',function (code, signal) {
                 if (!self.closed) self.fail(name + ' pipeline exited (code ' + code + ', signal ' + signal + ')' + (said ? ', it said: ' + said.trim().slice(-300) : ''));
             });
             child.stderr.on('data',function (bytes) { if (said.length < 600) said += String(bytes); });
-        });
-        var micBytes = 0;
-        if (microphone) microphone.stdout.on('data',function (bytes) {
-            if (!micBytes) note('microphone: first audio after ' + self.since());
-            micBytes += bytes.length;
-            var input = helper.stdio[3];
-            if (!self.closed && self.callActive && queued(input) < 38400) input.write(bytes);
         });
         listen(helper.stdio[4], 'data', function (bytes) {
             // A stalled speaker drops decoded audio; device loss is reported by exit.
@@ -154,13 +136,13 @@ class RobotMedia extends events.EventEmitter {
             self.cameraReady = true;
         });
         // One device at a time: a successful request is not a decoded frame.
-        var microphoneReady = microphone ? within('microphone', function (done) {
-            microphone.stdout.once('data', done);
+        var microphoneReady = capture ? within('microphone', function (done) {
             try {
-                var Microphone = self.options.microphone || SocketMicrophone;
-                self.microphoneSource = new Microphone(self.jibo, {log:self.log});
-                self.microphoneSource.on('failure', function (error) { if (!self.closed) self.fail('microphone source: ' + why(error)); });
-                self.microphoneSource.start(microphone.stdin).catch(function (error) {
+                var Microphone = self.options.microphone || PageMicrophone;
+                // Audio leaves Jibo only while a call is up.
+                self.microphoneSource = new Microphone(self.jibo, {log: self.log, active: function () { return !self.closed && self.callActive; }});
+                self.microphoneSource.on('failure', function (error) { if (!self.closed) self.fail('microphone: ' + why(error)); });
+                self.microphoneSource.start(helper.stdio[3]).then(done, function (error) {
                     if (!self.closed) self.fail('microphone preparation: ' + why(error));
                 });
             } catch (error) { self.fail('microphone preparation: ' + why(error)); }
@@ -181,7 +163,7 @@ class RobotMedia extends events.EventEmitter {
     }
     sendingVideo() { return this.callActive && this.cameraEnabled; }
     setCallActive(active) {
-        if (active !== this.callActive) this.log.info('call ' + (active ? (this.options.captureMicrophone === false ? 'active: microphone disabled for video test' : 'active: the microphone now goes to the call') : 'no longer active') + ' (' + this.since() + ')');
+        if (active !== this.callActive) this.log.info('call ' + (active ? (this.options.captureMicrophone === false ? 'active: microphone capture disabled' : 'active: the microphone now goes to the call') : 'no longer active') + ' (' + this.since() + ')');
         this.callActive = active; if (!active) this.setCamera(false);
     }
     setCamera(enabled) {

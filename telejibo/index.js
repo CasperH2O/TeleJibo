@@ -109,8 +109,6 @@ function bindKeyboard(screen) {
 }
 
 var controller = {
-    // Temporary video-test build while platform microphone access is investigated.
-    microphoneEnabled: false,
     mediaReady: false,
     // The person's choices (lib/settings.js); defaults until the data folder has been read.
     settings: settings.clean(),
