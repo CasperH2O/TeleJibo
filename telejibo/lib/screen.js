@@ -35,6 +35,9 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.mediaState = 'connecting'; this.screen = null; this.callStarted = 0; this.clock = null; this.preparing = false;
             this.pendingCall = null; this.preparation = null; this.canceling = false; this.outgoingRequest = false;
             this.callTone = new CallTone(jibo, this.diagnostics);
+            // An incoming call rings until it is answered, declined or gone.
+            this.ringTone = new CallTone(jibo, this.diagnostics, {src: 'jibo-anim-db-animations://audio/device/ds_double_pulse_01.m4a', volume: 0.7});
+            this.missed = null;
             this.avatars = new Map(); this.serial = 0; this.art = null; this.decor = null;
             this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = '';
             // Contacts paging: strip offset in px, the finger's drag, the spring and a requested page.
@@ -91,7 +94,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         }
         dial(contact) {
             if (!contact || !contact.available || this.call || this.pendingCall || this.outgoingRequest || this.closing) return;
-            this.message = ''; this.canceling = false;
+            this.message = ''; this.canceling = false; this.missed = null;
             var self = this, pending = this.pendingCall = {user_id: contact.id, name: contact.name, outgoing: true};
             this.disposeVideo();
             return this.prepareCall(pending, function () {
@@ -498,8 +501,10 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             });
             if (screen !== 'contacts' && (this.dragging || this.animation)) { this.dragging = null; this.animation = null; this.slide = {x: 0, velocity: 0, target: 0}; }
             this.panning(screen === 'contacts');
-            this.text('message', this.message);
-            this.show('message', screen !== 'contacts' && !!this.message);
+            // On the contacts screen the line under the pager tells of a call that rang unseen.
+            var note = screen === 'contacts' ? (this.missed ? T.missedFrom + (this.missed.name || '').trim() : '') : this.message;
+            this.text('message', note);
+            this.show('message', !!note);
             var message = this.component('message');
             if (message && message.display) message.display.y = layout.message.y[screen] || layout.message.y.other;
             var closing = this.leaving || this.closing || this.state === 'closing';
@@ -520,6 +525,8 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             var dialing = this.pendingCall || this.call && this.call.outgoing &&
                 ['callStatePending', 'callStateExchangingKeys'].indexOf(this.call.state) >= 0;
             if (dialing && !this.canceling && !closing) this.callTone.start(); else this.callTone.stop();
+            var ringing = this.call && !this.call.outgoing && this.call.state === 'callStatePending' && !this.preparing;
+            if (ringing && !this.canceling && !closing) this.ringTone.start(); else this.ringTone.stop();
         }
         renderContacts(screen) {
             var page = this.page, c = layout.contacts;
@@ -699,7 +706,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (this.decor) this.decor.ghosts.forEach(function (ghost) { ghost.sprite.x = ghost.x + offset; });
         }
         halt() {
-            this.callTone.stop(); this.pendingCall = null; this.preparation = null; this.preparing = false;
+            this.callTone.stop(); this.ringTone.stop(); this.pendingCall = null; this.preparation = null; this.preparing = false;
             this.panning(false); this.animation = null; this.dragging = null;
             if (this.turning) { clearTimeout(this.turning.timer); this.turning = null; }
             this.ticking(false); this.slide = {x: 0, velocity: 0, target: 0};

@@ -5,7 +5,8 @@
 // be canceled safely by destroying its Sound while a decode is pending.
 var serial = 0;
 module.exports = class CallTone {
-    constructor(jibo, log) { this.jibo = jibo; this.log = log; this.current = null; }
+    // options: {src, volume} of another installed robot sound (the incoming ring).
+    constructor(jibo, log, options) { this.jibo = jibo; this.log = log; this.current = null; this.options = options || {}; }
     start() {
         if (this.current) return;
         var api = this.jibo.sound, self = this;
@@ -15,8 +16,8 @@ module.exports = class CallTone {
         function remove() { if (item.sound) { item.sound.stop(); api.remove(item.alias); item.sound = null; } }
         item.remove = remove;
         try {
-            item.sound = api.add(item.alias, {src: 'jibo-anim-db-animations://audio/device/ds_processing_01.m4a',
-                loop: true, volume: 0.35});
+            item.sound = api.add(item.alias, {src: this.options.src || 'jibo-anim-db-animations://audio/device/ds_processing_01.m4a',
+                loop: true, volume: this.options.volume || 0.35});
             item.sound.play({loaded: function (error) {
                 item.loading = false;
                 if (error || self.current !== item) {

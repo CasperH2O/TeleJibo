@@ -1,6 +1,6 @@
 {
   "name": "@be/telejibo",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "Bring your Telegram video calls to Jibo. Tap a contact, answer a friend, and let Jibo follow your face. Unofficial.",
   "main": "index.js",
   "config": {
@@ -8,6 +8,7 @@
   },
   "jibo": {
     "main": "index.html",
+    "background": "background.js",
     "type": "asset-pack",
     "launchRule": "launch.rule",
     "prompt": "TeleJibo",

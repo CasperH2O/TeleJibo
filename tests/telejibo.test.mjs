@@ -473,6 +473,8 @@ function loadController(data) {
     const fakes = {jibo: {expression: {}, face: {views: {}}}, '@be/be-framework': {BeSkill: class {}}, './lib/helper': FakeSupervisor, './lib/media': FakeMedia};
     const entry = require.resolve('../telejibo/index.js');
     delete require.cache[entry];
+    // Each test starts without a helper left running by the one before.
+    require('../telejibo/lib/session.js').discard();
     Module._load = function (request, parent, ...rest) {
         if (parent && parent.filename === entry && request in fakes) return fakes[request];
         return original.call(this, request, parent, ...rest);
@@ -566,3 +568,46 @@ test('media: a broken microphone pipe to the helper releases the microphone and 
         assert.ok(d.children.every(child => child.killed.includes('SIGTERM')));
     });
 });
+
+test('controller: with Background calls on, closing keeps the helper signed in and ends a call; reopening joins it', async () => {
+    const data = temp();
+    fs.writeFileSync(path.join(data, 'api.override.json'), JSON.stringify(KEY));
+    require('../telejibo/lib/settings.js').write(data, {background: true});
+    const loaded = loadController(data), screen = fakeScreen();
+    process.env.TELEJIBO_DATA_DIR = data;
+    try {
+        loaded.controller.opened(screen);
+        const supervisor = loaded.supervisors[0];
+        assert.equal(loaded.controller.settings.background, true);
+        supervisor.emit('status', {event: 'authorization', state: 'ready'});
+        supervisor.emit('status', {event: 'call', call_id: 3, state: 'callStatePending', outgoing: false, name: 'Zoe'});
+        await loaded.controller.close();
+        assert.ok(supervisor.child, 'the helper keeps running');
+        assert.deepEqual(supervisor.sent.at(-1), {method: 'call.hangup', call_id: 3});
+        supervisor.emit('status', {event: 'call', call_id: 3, state: 'callStateDiscarded'});
+        const events = screen.events.length;
+        supervisor.emit('status', {event: 'call', call_id: 4, state: 'callStatePending', outgoing: false, name: 'Zoe'});
+        assert.equal(screen.events.length, events, 'a closed screen hears nothing');
+        // Reopened (by the background script, for call 4): no second helper, and the call is shown.
+        const again = fakeScreen();
+        loaded.controller.opened(again);
+        assert.equal(loaded.supervisors.length, 1);
+        assert.deepEqual(again.events.map(e => e.event), ['authorization', 'call']);
+        assert.equal(again.events[1].call_id, 4);
+        // Switched off: the next close stops the helper.
+        loaded.controller.setSetting('background', false);
+        await loaded.controller.close();
+        assert.equal(supervisor.child, null);
+    } finally { delete process.env.TELEJIBO_DATA_DIR; }
+});
+
+test('controller: a keyframe request from the helper restarts the camera stream and never reaches the screen', async () => {
+    const {controller, supervisor, medias, screen} = openController();
+    await controller.prepareMedia();
+    let restarts = 0; medias[0].restartCamera = () => ++restarts;
+    const events = screen.events.length;
+    supervisor.emit('status', {event: 'camera', state: 'restart'});
+    assert.equal(restarts, 1); assert.equal(screen.events.length, events);
+    await controller.close();
+});
+

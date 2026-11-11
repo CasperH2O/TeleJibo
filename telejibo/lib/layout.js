@@ -26,7 +26,7 @@ var screen = {width: 1280, height: 720, margin: 52, corner: 54, minText: 30};
 // steps name the service, because the person has to find it on their phone.
 var text = {
     title: 'TeleJibo', connecting: 'Connecting…', closing: 'Closing…', signedOut: 'Signed out',
-    videoCall: 'Video call', noCalls: 'No calls', online: 'Online', missed: 'Missed call',
+    videoCall: 'Video call', noCalls: 'No calls', online: 'Online', missed: 'Missed call', missedFrom: 'Missed call from ',
     incoming: 'Incoming video call', outgoing: 'Calling…', decline: 'Decline', accept: 'Answer', cancel: 'Cancel',
     mute: 'Mute', unmute: 'Unmute', micOff: 'Mic off', camera: 'Camera', tracking: 'Look at me', end: 'End', cameraOff: 'Camera off',
     trackingUnavailable: 'Head tracking is unavailable',
