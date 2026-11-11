@@ -13,6 +13,7 @@
 #include "api/video/i420_buffer.h"
 #include "rtc_base/time_utils.h"
 #include "pipe-media.h"
+#include "camera-input.h"
 #include "video-frame.h"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -257,7 +258,7 @@ public:
         tgcalls::Descriptor descriptor{
             .version = version,
             .config = {.initializationTimeout = 20, .receiveTimeout = 20, .enableP2P = ready["allow_p2p"].bool_value() && !relayOnly,
-                       .maxApiLayer = tgcalls::Meta::MaxLayer(), .preferredVideoCodecs = {"VP8", "H264"},
+                       .maxApiLayer = tgcalls::Meta::MaxLayer(), .preferredVideoCodecs = pipeMedia ? std::vector<std::string>{"VP8"} : std::vector<std::string>{"VP8", "H264"},
                        .customParameters = ready["custom_parameters"].string_value()},
             .rtcServers = rtcServers,
             .encryptionKey = tgcalls::EncryptionKey(key, outgoing),
@@ -297,6 +298,7 @@ public:
     void setCamera(bool enabled) { if (capture) capture->setState(enabled ? tgcalls::VideoState::Active : tgcalls::VideoState::Inactive); }
     Json stats() {
         rusage usage{}; getrusage(RUSAGE_SELF, &usage);
+        auto &camera = jibo_media::encodedCamera();
         return Object{{"event", "media_stats"}, {"media_source", pipeMedia ? "robot" : "synthetic"}, {"relay_only", relayOnly},
             {"decoded_video_frames", sink ? double(sink->frames.load()) : 0},
             {"decoded_width", sink ? sink->width.load() : 0}, {"decoded_height", sink ? sink->height.load() : 0},
@@ -307,6 +309,12 @@ public:
             {"video_pipe_failed", sink && sink->output && sink->output->failed},
             {"dropped_speaker_frames", audio && audio->output ? double(audio->output->dropped.load()) : 0},
             {"dropped_video_frames", sink && sink->output ? double(sink->output->dropped.load()) : 0},
+            // Outgoing camera: "stream" is Jibo's own VP8 passed through, "frames" the encoded fallback.
+            {"camera_mode", !pipeMedia ? "synthetic" : camera.streaming ? "stream" : "frames"},
+            {"camera_sent_frames", double(camera.sent.load())}, {"camera_waiting_frames", double(camera.size())},
+            {"camera_restarts", double(camera.restarts.load())}, {"camera_overflows", double(camera.overflows.load())},
+            {"camera_width", camera.width.load()}, {"camera_height", camera.height.load()},
+            {"camera_target_bps", camera.targetBps.load()},
             {"maxrss_kib", double(usage.ru_maxrss)},
             {"cpu_seconds", usage.ru_utime.tv_sec + usage.ru_stime.tv_sec + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000000.0}};
     }
@@ -401,7 +409,8 @@ int main(int argc, char **argv) {
         td_execute("{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":0}");
         td_execute("{\"@type\":\"setLogStream\",\"log_stream\":{\"@type\":\"logStreamEmpty\"}}");
         if (!rtc::InitializeSSL()) throw std::runtime_error("ssl_initialization");
-        tgcalls::SetProbeCodec("AUTO"); tgcalls::SetPipeCapture(pipeMedia); tgcalls::Register<tgcalls::InstanceV2Impl>();
+        // Jibo's camera stream is VP8, so the robot offers only that; every Telegram app takes it.
+        tgcalls::SetProbeCodec(pipeMedia ? "VP8" : "AUTO"); tgcalls::SetPipeCapture(pipeMedia); tgcalls::Register<tgcalls::InstanceV2Impl>();
         client = td_create_client_id();
         account = std::make_unique<Account>([client](Json value) { td_send(client, value.dump().c_str()); }, output, parameters, protocol(relayOnly), synthetic);
         if (pipeMedia) account->mediaSource = "robot";
@@ -479,6 +488,9 @@ int main(int argc, char **argv) {
             if (engine.active() && std::chrono::steady_clock::now() - lastStats >= 5s) {
                 output(engine.stats()); lastStats = std::chrono::steady_clock::now();
             }
+            // The far side needs a keyframe, or the camera stream broke: the skill starts a new one.
+            if (pipeMedia && jibo_media::encodedCamera().takeRestart() && engine.active())
+                output(Object{{"event", "camera"}, {"state", "restart"}});
             for (auto &[kind, data] : engine.drain()) {
                 if (kind == "signal" && account->callId) account->request({{"@type", "sendCallSignalingData"}, {"call_id", account->callId}, {"data", data}});
                 else if (kind == "state") {

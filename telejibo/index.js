@@ -157,6 +157,8 @@ var controller = {
                     'pipe failed mic/speaker/video', !!value.microphone_pipe_failed + '/' + !!value.speaker_pipe_failed + '/' + !!value.video_pipe_failed);
             }
             if (media && !media.closed && value.event === 'call') media.setCallActive(value.state === 'callStateReady');
+            // Between the helper and the camera; the screen has no part in it.
+            if (value.event === 'camera') { if (media && value.state === 'restart') media.restartCamera(); return; }
             // A finished or refused call gives the devices back.
             if (value.event === 'call' && ['callStateDiscarded', 'callStateError'].indexOf(value.state) >= 0 ||
                 value.event === 'error' && !screen.call && !mediaStarting) releaseMedia();

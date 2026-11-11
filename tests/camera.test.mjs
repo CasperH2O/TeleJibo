@@ -2,141 +2,133 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
-import {PassThrough} from 'node:stream';
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url);
-const Camera = require('../telejibo/lib/camera');
-const tick = () => new Promise(resolve => setImmediate(resolve));
-const frame = () => Buffer.alloc(115200, 42);
-function fixture(overrides = {}) {
-    const posts = [], children = [], sources = [], commands = [];
-    const options = {
-        log: {info() {}}, timeoutMs: 1000, reserveCheck: () => Promise.resolve(5000),
-        post: (route, body) => { posts.push([route, body]); return Promise.resolve(); },
-        connect: () => {
-            const socket = new PassThrough(); sources.push(socket);
-            setImmediate(() => socket.emit('connect')); return socket;
-        },
-        spawn: (command, args) => {
-            commands.push([command, args]);
-            const child = Object.assign(new EventEmitter(), {exitCode:null, stdin:new PassThrough(), stdout:new PassThrough(), stderr:new PassThrough()});
-            child.kill = signal => { child.exitCode = 0; setImmediate(() => { child.emit('exit',0,signal); child.emit('close',0,signal); }); };
-            children.push(child); return child;
-        }, ...overrides
-    };
-    const camera = new Camera({records:[{name:'media',host:'127.0.0.1',port:8486}]}, options);
-    return {camera, posts, children, sources, commands};
-}
+const CallCamera = require('../telejibo/lib/camera');
+const {StreamCamera, record} = CallCamera;
+const tick = (ms = 0) => new Promise(resolve => ms ? setTimeout(resolve, ms) : setImmediate(resolve));
 
-test('native camera waits for a whole frame, preserves split frames, and releases probe/start/stop', async () => {
-    const f = fixture(), received = [];
-    f.camera.on('frame', bytes => received.push(bytes));
-    let ready = false;
-    const started = f.camera.start().then(() => { ready = true; });
-    await tick();
-    assert.equal(ready,false, 'HTTP success is not device readiness');
-    f.children[0].stdout.write(frame().subarray(0,123)); await tick();
-    assert.equal(ready,false);
-    f.children[0].stdout.write(Buffer.concat([frame().subarray(123),frame()]));
-    await started;
-    assert.equal(received.length,2); assert.deepEqual(received[0],frame());
-    assert.deepEqual(f.posts[0],['/media/streaming/start',{enable:true,ip:'127.0.0.1',port:'5000'}]);
-    assert.ok(f.commands[0][1].includes('omxvp8dec'));
-    assert.ok(f.commands[0][1].includes('video/x-raw,format=I420,width=320,height=240,framerate=10/1,pixel-aspect-ratio=1/1'));
-    await f.camera.stop();
-    assert.equal(f.sources[0].destroyed,true);
-    assert.equal(f.camera.ownsStream,false);
-    assert.equal(f.posts[1][0],'/media/streaming/control');
-    const restarted = f.camera.start(); await tick(); f.children[1].stdout.write(frame()); await restarted;
-    await f.camera.stop();
-    assert.equal(f.posts.length,4);
-});
-
-test('native camera never stops another stream after conflict, but cleans up an ambiguous start', async () => {
-    for (const notStarted of [true,false]) {
-        let stops = 0;
-        const f = fixture({post: route => {
-            if (route.endsWith('/start')) return Promise.reject(Object.assign(Error('start_failed'),{notStarted}));
-            stops++; return Promise.resolve();
-        }});
-        await assert.rejects(f.camera.start(),/start_failed/);
-        await f.camera.stop();
-        assert.equal(stops,notStarted ? 0 : 1);
-        assert.equal(f.children.length,0);
+// BEam's jibo.media.getCameraStream, driven by the test, and the helper's camera pipe.
+function devices(overrides = {}) {
+    const streams = [], pipe = Object.assign(new EventEmitter(), {writableLength: 0, writes: [], write(bytes) { this.writes.push(bytes); return true; }});
+    const jibo = {privacyController: {enabled: false}, media: {getCameraStream(onData) {
+        const stream = {onData, stopped: 0, stop() { ++this.stopped; }};
+        streams.push(stream);
+        if (overrides.refuse) { const error = overrides.refuse(streams.length); if (error) return Promise.reject(error); }
+        return Promise.resolve({mimeType: 'video/webm; codecs="vp8"', stop: () => stream.stop()});
+    }}};
+    class Photo extends EventEmitter {
+        constructor() { super(); this.started = 0; this.stopped = 0; }
+        start() { ++this.started; return overrides.photoFails ? Promise.reject(Error('camera_no_frames')) : Promise.resolve(); }
+        stop() { ++this.stopped; return Promise.resolve(); }
     }
+    const photo = new Photo();
+    const parse = bytes => ({magic: bytes.toString('ascii', 0, 4), length: bytes.readUInt32LE(4), serial: bytes.readUInt32LE(8), index: bytes.readUInt32LE(12), body: bytes.slice(16)});
+    return {streams, pipe, jibo, photo, parse};
+}
+const camera = (d, options = {}) => new CallCamera(d.jibo, {destination: d.pipe, photo: d.photo, restartGap: 0, ...options});
+
+test('record: JIWM, length, serial and index, then the bytes', () => {
+    const bytes = record(7, 3, Buffer.from('abc'));
+    assert.equal(bytes.toString('ascii', 0, 4), 'JIWM');
+    assert.deepEqual([bytes.readUInt32LE(4), bytes.readUInt32LE(8), bytes.readUInt32LE(12)], [3, 7, 3]);
+    assert.equal(bytes.slice(16).toString(), 'abc');
 });
 
-test('stop during native POST stops the late producer without spawning a decoder', async () => {
-    let finish, stops = 0;
-    const f = fixture({post: route => {
-        if (route.endsWith('/start')) return new Promise(resolve => { finish = resolve; });
-        stops++; return Promise.resolve();
-    }});
-    const started = f.camera.start(); const rejected = assert.rejects(started,/camera_closed/);
-    await tick();
-    const stopped = f.camera.stop(); finish();
-    await Promise.all([rejected,stopped]);
-    assert.equal(stops,1); assert.equal(f.children.length,0);
+test('the live stream goes to the helper in order, in bounded pieces, and stops with the camera', async () => {
+    const d = devices(), c = camera(d);
+    assert.equal(c.mode, 'stream');
+    await c.probe(); assert.equal(d.photo.started, 0, 'the stream needs no trial photo');
+    let ready = false; const started = c.start().then(() => { ready = true; });
+    await tick(); assert.equal(ready, false, 'a connected encoder is not yet video');
+    d.streams[0].onData(Buffer.alloc(10, 1)); await started;
+    d.streams[0].onData(Buffer.alloc(CallCamera.PIECE + 5, 2));
+    const records = d.pipe.writes.map(d.parse);
+    assert.deepEqual(records.map(r => r.index), [0, 1, 2]);
+    assert.deepEqual(records.map(r => r.length), [10, CallCamera.PIECE, 5]);
+    assert.ok(records.every(r => r.magic === 'JIWM' && r.serial === records[0].serial && r.body.length === r.length));
+    assert.equal(d.photo.started, 0);
+    await c.stop();
+    assert.equal(d.streams[0].stopped, 1);
+    d.streams[0].onData(Buffer.alloc(10)); assert.equal(d.pipe.writes.length, 3, 'nothing after stop');
 });
 
-test('stop before the first frame cancels readiness and releases the native service', async () => {
-    const f = fixture(), started = f.camera.start();
-    const rejected = assert.rejects(started,/camera_closed/); await tick();
-    await f.camera.stop(); await rejected;
-    assert.equal(f.camera.ownsStream,false);
-    assert.equal(f.children[0].exitCode,0);
+test('a keyframe request starts a new stream with a new serial from index 0, never two at once', async () => {
+    const d = devices(), c = camera(d);
+    const started = c.start(); await tick(); d.streams[0].onData(Buffer.alloc(4)); await started;
+    c.restart(); c.restart(); await tick(5);
+    assert.equal(d.streams.length, 2); assert.equal(d.streams[0].stopped, 1);
+    d.streams[0].onData(Buffer.alloc(4)); d.streams[1].onData(Buffer.alloc(4));
+    const records = d.pipe.writes.map(d.parse);
+    assert.equal(records.length, 2);
+    assert.notEqual(records[1].serial, records[0].serial); assert.equal(records[1].index, 0);
+    await c.stop(); c.restart(); await tick(5);
+    assert.equal(d.streams.length, 2, 'no stream after the camera is off');
 });
 
-test('decoder loss after readiness is reported; a failed native stop remains retryable', async () => {
-    let stops = 0;
-    const f = fixture({post: route => {
-        if (route.endsWith('/control') && ++stops === 1) return Promise.reject(Error('stop_failed'));
-        return Promise.resolve();
-    }});
-    const failures = []; f.camera.on('failure', error => failures.push(error.message));
-    const started = f.camera.start(); await tick(); f.children[0].stdout.write(frame()); await started;
-    f.children[0].exitCode = 1; f.children[0].emit('exit',1,null);
-    assert.equal(failures.length,1);
-    await assert.rejects(f.camera.stop(),/stop_failed/);
-    assert.equal(f.camera.ownsStream,true);
-    await f.camera.stop(); assert.equal(f.camera.ownsStream,false);
+test('restarts are spaced out and a full helper pipe starts over instead of dropping bytes', async () => {
+    const d = devices(), c = camera(d, {restartGap: 40, queueLimit: 100});
+    const started = c.start(); await tick(); d.streams[0].onData(Buffer.alloc(4)); await started;
+    c.restart(); await tick(10);
+    assert.equal(d.streams.length, 1, 'too soon after the stream started');
+    await tick(50); assert.equal(d.streams.length, 2);
+    d.streams[1].onData(Buffer.alloc(4));
+    d.pipe.writableLength = 101; d.streams[1].onData(Buffer.alloc(4));
+    assert.equal(d.pipe.writes.length, 2, 'not written into a full pipe');
+    d.pipe.writableLength = 0; await tick(60);
+    assert.equal(d.streams.length, 3);
+    await c.stop();
 });
 
-test('busy preflight does not start or stop a native producer', async () => {
-    const f = fixture({reserveCheck: () => Promise.reject(Error('camera_busy'))});
-    await assert.rejects(f.camera.start(),/camera_busy/);
-    await f.camera.stop(); assert.equal(f.posts.length,0);
+test('a camera that is still closing is retried; one that stays in use falls back to photos', async () => {
+    const busy = Error('Camera is in use');
+    const d = devices({refuse: n => n < 3 ? busy : null}), c = camera(d);
+    const started = c.start(); await tick(700);
+    assert.equal(d.streams.length, 3); d.streams[2].onData(Buffer.alloc(4)); await started;
+    assert.equal(c.mode, 'stream'); await c.stop();
+
+    const e = devices({refuse: () => Error('Camera service HTTP 404')}), f = camera(e);
+    await f.start();
+    assert.equal(f.mode, 'photo'); assert.equal(e.photo.started, 1);
+    const frames = []; f.on('frame', bytes => frames.push(bytes));
+    e.photo.emit('frame', Buffer.alloc(8)); assert.equal(frames.length, 1);
+    f.restart(); await tick(5); assert.equal(e.streams.length, 1, 'photos have no keyframes to ask for');
+    await f.stop(); assert.ok(e.photo.stopped >= 1);
 });
 
-test('native camera retries a producer that is not listening yet and cancels a frame timeout', async () => {
-    let connects = 0;
-    const f = fixture({connect: () => {
-        const socket = new PassThrough();
-        setImmediate(() => {
-            if (++connects === 1) socket.emit('error',Object.assign(Error('not listening'),{code:'ECONNREFUSED'}));
-            else socket.emit('connect');
-        });
-        return socket;
-    }});
-    const started = f.camera.start();
-    await new Promise(resolve => setTimeout(resolve,150));
-    assert.equal(connects,2);
-    f.children[0].stdout.write(frame()); await started; await f.camera.stop();
-    const timed = fixture({timeoutMs:20});
-    await assert.rejects(timed.camera.start(),/camera_no_frames/);
-    assert.equal(timed.camera.ownsStream,false);
-    assert.equal(timed.children[0].exitCode,0);
+test('a stream that goes quiet falls back to photos; privacy mode ends the camera', async () => {
+    const d = devices(), c = camera(d, {stallMs: 30});
+    const started = c.start(); await tick(); d.streams[0].onData(Buffer.alloc(4)); await started;
+    await tick(700);
+    assert.equal(c.mode, 'photo'); assert.equal(d.streams[0].stopped, 1); assert.equal(d.photo.started, 1);
+    await c.stop();
+
+    const e = devices(), f = camera(e), failures = [];
+    f.on('failure', error => failures.push(error.message));
+    const again = f.start(); await tick(); e.streams[0].onData(Buffer.alloc(4)); await again;
+    e.jibo.privacyController.enabled = true; await tick(600);
+    assert.deepEqual(failures, ['privacy_enabled']);
+    assert.equal(e.photo.started, 0); assert.equal(e.streams[0].stopped, 1);
+    const g = devices(); g.jibo.privacyController.enabled = true;
+    await assert.rejects(new StreamCamera(g.jibo, {destination: g.pipe}).start(), /privacy_enabled/);
 });
 
-test('a final stop cancels a restart queued behind native cleanup', async () => {
-    let release;
-    const f = fixture({post: route => route.endsWith('/control') ? new Promise(resolve => { release = resolve; }) : Promise.resolve()});
-    const started = f.camera.start(); await tick(); f.children[0].stdout.write(frame()); await started;
-    const stopped = f.camera.stop(); await tick();
-    const restarting = f.camera.start();
-    const rejected = assert.rejects(restarting,/camera_closed/);
-    const finalStop = f.camera.stop(); release();
-    await Promise.all([stopped,finalStop,rejected]);
-    assert.equal(f.children.length,1);
-    assert.equal(f.camera.ownsStream,false);
+test('without the stream API, or when told not to use it, the camera is the photo path with its trial frame', async () => {
+    const d = devices(); delete d.jibo.media.getCameraStream;
+    const c = camera(d);
+    assert.equal(c.mode, 'photo');
+    await c.probe(); assert.deepEqual([d.photo.started, d.photo.stopped], [1, 1]);
+    await c.start(); assert.equal(d.photo.started, 2);
+    const failures = []; c.on('failure', error => failures.push(error.message));
+    d.photo.emit('failure', Error('camera_stalled')); assert.deepEqual(failures, ['camera_stalled']);
+    assert.equal(camera(devices(), {stream: false}).mode, 'photo');
+    assert.equal(c.summary(), null);
+});
+
+test('stop during start stops a stream that arrives late and sends nothing', async () => {
+    const d = devices(); let give;
+    d.jibo.media.getCameraStream = (onData) => new Promise(resolve => { give = () => { const s = {stopped: 0, stop() { ++this.stopped; }}; d.streams.push(s); resolve(s); onData(Buffer.alloc(4)); }; });
+    const c = camera(d); c.start(); await tick();
+    await c.stop(); give(); await tick();
+    assert.equal(d.streams[0].stopped, 1); assert.equal(d.pipe.writes.length, 0); assert.equal(d.photo.started, 0);
 });

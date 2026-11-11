@@ -7,7 +7,7 @@ var childProcess = require('child_process'), events = require('events'), fs = re
 var StringDecoder = require('string_decoder').StringDecoder;
 var createLog = require('./log');
 
-var EVENTS = ['helper', 'authorization', 'contacts', 'avatar', 'call', 'media', 'media_stats', 'status', 'error', 'signed_out'];
+var EVENTS = ['helper', 'authorization', 'contacts', 'avatar', 'call', 'media', 'media_stats', 'camera', 'status', 'error', 'signed_out'];
 var LOADER = '/lib/ld-linux-armhf.so.3';
 
 // BEacon writes package files without execute permission. Grant it to our own helper; if

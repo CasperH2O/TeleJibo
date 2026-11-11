@@ -1,176 +1,174 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 'use strict';
-// The native media service owns the sensor. Decode its loopback VP8/WebM stream
-// with the robot's OpenMAX decoder and deliver fixed-size I420 frames in memory.
-var events = require('events'), http = require('http'), net = require('net');
-var childProcess = require('child_process');
-var FRAME_BYTES = 320 * 240 * 3 / 2;
+// The call's camera. BEam 3.1.9's jibo.media.getCameraStream gives Jibo's camera as a live
+// 1280x720 VP8 WebM stream from his hardware encoder. Its bytes go to the helper as they
+// are (HELPER.md, fd 5, `JIWM` records) and into the call without decoding or re-encoding
+// on Jibo. If the stream cannot be had (older BEam, camera in use), decoded preview
+// photos (photo-camera.js) are used instead. Nothing is stored.
+// Runs on the robot's Node 6: ES2015 only.
+var EventEmitter = require('events');
 
-function reserveCheck() {
-    return new Promise(function (resolve, reject) {
-        var server = net.createServer();
-        server.on('error', reject);
-        server.listen(5000, '127.0.0.1', function () {
-            var port = 5000;
-            server.close(function (error) { if (error) reject(error); else resolve(port); });
-        });
-    });
+var PIECE = 262144;            // bytes per record; the helper accepts up to 1 MiB
+var QUEUE_LIMIT = 1048576;     // about five seconds waiting in the helper's pipe: start over
+var RESTART_GAP = 2000;        // ms between streams; each one costs the far side a short freeze
+var serial = 0;
+function queued(stream) { return typeof stream.writableLength === 'number' ? stream.writableLength : stream._writableState && stream._writableState.length || 0; }
+function why(error) { return error ? (error.code ? error.code + ': ' : '') + (error.message || String(error)) : 'unknown'; }
+
+// `JIWM`, then little-endian uint32 payload length, stream serial and piece index.
+function record(stream, index, bytes) {
+    var header = Buffer.alloc(16);
+    header[0] = 0x4a; header[1] = 0x49; header[2] = 0x57; header[3] = 0x4d;   // JIWM
+    header.writeUInt32LE(bytes.length, 4); header.writeUInt32LE(stream >>> 0, 8); header.writeUInt32LE(index >>> 0, 12);
+    return Buffer.concat([header, bytes]);
 }
-class NativeCamera extends events.EventEmitter {
+
+class StreamCamera extends EventEmitter {
+    constructor(jibo, options) {
+        super(); this.jibo = jibo; this.options = options || {};
+        this.destination = this.options.destination; this.log = this.options.log;
+        this.generation = 0; this.running = false; this.starting = null; this.handle = null;
+        this.deadline = null; this.watch = null; this.retry = null; this.again = null;
+        this.startedAt = 0; this.lastData = 0;
+        this.stats = {bytes: 0, streams: 0, restarts: 0};
+    }
+    static available(jibo) { return !!(jibo && jibo.media && typeof jibo.media.getCameraStream === 'function'); }
+    isPrivate() { return !!(this.jibo.privacyController && this.jibo.privacyController.enabled); }
+    // Resolves when the first bytes of a new stream have gone to the helper.
+    start() {
+        if (this.running) return this.starting;
+        if (this.isPrivate()) return Promise.reject(Error('privacy_enabled'));
+        var self = this, options = this.options, generation = ++this.generation, id = serial = (serial + 1) >>> 0 || 1, index = 0;
+        this.running = true; this.startedAt = Date.now(); this.stats.streams++;
+        this.starting = new Promise(function (resolve, reject) {
+            var first = true, attempts = 0;
+            function current() { return self.running && generation === self.generation; }
+            function fail(error) {
+                if (!current()) return;
+                self.halt();
+                if (first) { first = false; reject(error); } else self.emit('failure', error);
+            }
+            function data(bytes) {
+                if (!current()) return;
+                self.lastData = Date.now();
+                // The stream cannot lose bytes and stay readable, so a full pipe means a new stream.
+                if (queued(self.destination) > (options.queueLimit || QUEUE_LIMIT)) { self.restart('the helper is not reading'); return; }
+                try {
+                    for (var at = 0; at < bytes.length; at += PIECE) self.destination.write(record(id, index++, bytes.slice(at, at + PIECE)));
+                } catch (error) { fail(error); return; }
+                self.stats.bytes += bytes.length;
+                if (first) { first = false; clearTimeout(self.deadline); self.deadline = null; resolve(); }
+            }
+            function open() {
+                self.retry = null;
+                if (!current()) return;
+                Promise.resolve().then(function () { return self.jibo.media.getCameraStream(data); }).then(function (handle) {
+                    if (!current()) { try { handle.stop(); } catch (_) {} return; }
+                    self.handle = handle; self.lastData = Date.now();
+                    // BEam ends the stream by itself (privacy mode, the encoder stopping) without telling us.
+                    self.watch = setInterval(function () {
+                        if (self.isPrivate()) fail(Error('privacy_enabled'));
+                        else if (Date.now() - self.lastData > (options.stallMs || 3000)) fail(Error('camera_stream_stalled'));
+                    }, 500);
+                }, function (error) {
+                    // The previous stream is still closing: BEam frees the camera a moment after stop().
+                    if (current() && /in use/i.test(error && error.message || '') && ++attempts < 12) { self.retry = setTimeout(open, 300); return; }
+                    fail(error instanceof Error ? error : Error('camera_stream_refused'));
+                });
+            }
+            self.deadline = setTimeout(function () { fail(Error('camera_stream_no_data')); }, options.timeoutMs || 10000);
+            open();
+        });
+        // A stop during start is not an error for whoever asked to stop.
+        this.starting.catch(function () {});
+        return this.starting;
+    }
+    // A new stream, for its keyframe. Streams are at least RESTART_GAP apart.
+    restart(reason) {
+        var self = this;
+        if (!this.running || this.again) return;
+        var wait = Math.max(0, this.startedAt + (this.options.restartGap === undefined ? RESTART_GAP : this.options.restartGap) - Date.now());
+        this.again = setTimeout(function () {
+            self.again = null;
+            if (!self.running) return;
+            if (self.log) self.log.info('camera stream: starting a new one (' + reason + ')');
+            self.stats.restarts++;
+            self.halt();
+            self.start().catch(function (error) { self.emit('failure', error); });
+        }, wait);
+    }
+    halt() {
+        this.generation++; this.running = false; this.starting = null;
+        clearTimeout(this.deadline); clearInterval(this.watch); clearTimeout(this.retry); clearTimeout(this.again);
+        this.deadline = this.watch = this.retry = this.again = null;
+        var handle = this.handle; this.handle = null;
+        if (handle) try { handle.stop(); } catch (_) {}
+    }
+    stop() { this.halt(); return Promise.resolve(); }
+}
+
+// The stream when Jibo has it, preview photos when he does not. Emits `frame` (I420 from
+// the photo path, for the caller to send) and `failure` when neither works.
+class CallCamera extends EventEmitter {
+    // options.destination: the helper's camera pipe. options.photo: the photo camera to fall back on.
     constructor(jibo, options) {
         super(); this.jibo = jibo; this.options = options || {}; this.log = this.options.log;
-        var records = jibo.records || [], record = records.filter(function (r) { return r.name === 'media'; })[0];
-        this.address = record ? {host: record.host === '0.0.0.0' ? '127.0.0.1' : record.host, port: Number(record.port)} :
-            {host: '127.0.0.1', port: 8486};
-        this.child = null; this.ownsStream = false; this.closing = false; this.wanted = false;
-        this.starting = null; this.stopping = null; this.cleaning = null; this.cancelReady = null;
-        this.stall = null; this.retry = null; this.source = null; this.buffer = Buffer.alloc(0);
+        var self = this;
+        this.photo = this.options.photo;
+        this.photo.on('frame', function (bytes) { if (self.mode === 'photo') self.emit('frame', bytes); });
+        this.photo.on('failure', function (error) { if (self.mode === 'photo') self.emit('failure', error); });
+        this.stream = null; this.mode = 'photo'; this.wanted = false;
+        if (this.options.stream !== false && StreamCamera.available(jibo)) {
+            this.stream = new StreamCamera(jibo, {destination: this.options.destination, log: this.log, timeoutMs: this.options.streamTimeoutMs,
+                stallMs: this.options.stallMs, restartGap: this.options.restartGap, queueLimit: this.options.queueLimit});
+            this.stream.on('failure', function (error) { self.fallBack(error); });
+            this.mode = 'stream';
+        }
     }
-    post(route, payload) {
-        if (this.options.post) return this.options.post(route, payload);
-        var address = this.address;
-        return new Promise(function (resolve, reject) {
-            var body = JSON.stringify(payload), settled = false;
-            function finish(error) { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve(); }
-            var request = http.request({hostname: address.host, port: address.port, method: 'POST', path: route,
-                headers: {'Host':'127.0.0.1:' + address.port, 'Content-Type':'application/json', 'Content-Length':Buffer.byteLength(body)}}, function (response) {
-                response.resume();
-                if (response.statusCode >= 200 && response.statusCode < 300) finish();
-                else {
-                    var error = Error('camera_http_' + response.statusCode);
-                    error.notStarted = response.statusCode === 409;
-                    finish(error);
-                }
-            });
-            request.on('error', function (error) {
-                error.notStarted = ['ECONNREFUSED','ENOTFOUND','EHOSTUNREACH','ENETUNREACH','EACCES'].indexOf(error.code) !== -1;
-                finish(error);
-            });
-            var timer = setTimeout(function () { finish(Error('camera_http_timeout')); request.abort(); }, 5000);
-            request.end(body);
-        });
+    note(text) { if (this.log) this.log.info(text); }
+    // Before a call: is there a camera at all? The stream needs no trial; photos take one.
+    probe() {
+        var photo = this.photo;
+        if (this.mode === 'stream') return Promise.resolve();
+        return photo.start().then(function () { return photo.stop(); });
     }
     start() {
         var self = this;
         this.wanted = true;
-        if (this.stopping) return this.stopping.then(function () {
-            if (!self.wanted) throw Error('camera_closed');
-            return self.start();
-        });
-        if (this.starting) return this.starting;
-        if (this.child && !this.closing) return Promise.resolve();
-        this.closing = false; this.buffer = Buffer.alloc(0);
-        this.starting = Promise.resolve().then(function () {
-            // An earlier ambiguous stop must finish before another start.
-            if (self.ownsStream) return self.cleanup();
-            var controller = self.jibo.cameraStreamController;
-            if (controller && controller.state && controller.state !== 'off') throw Error('camera_busy');
-        }).then(function () { return (self.options.reserveCheck || reserveCheck)(); }).then(function (port) {
-            if (self.closing) throw Error('camera_closed');
-            self.port = port; self.ownsStream = true;
-            self.log.info('native camera start: service ' + self.address.host + ':' + self.address.port + ', loopback port ' + port);
-            return self.post('/media/streaming/start', {enable:true, ip:'127.0.0.1', port:String(port)}).catch(function (error) {
-                // Never stop another client's stream after a definite conflict.
-                if (error.notStarted) self.ownsStream = false;
-                throw error;
-            });
-        }).then(function () {
-            if (self.closing) throw Error('camera_closed');
-            return self.decode();
-        }).catch(function (error) {
-            return self.cleanup().then(function () { throw error; });
-        }).then(function () { self.starting = null; }, function (error) { self.starting = null; throw error; });
-        return this.starting;
-    }
-    decode() {
-        var self = this, spawn = this.options.spawn || childProcess.spawn;
-        return new Promise(function (resolve, reject) {
-            var ready = false, said = '', finished = false;
-            var timer = setTimeout(function () { finish(Error('camera_no_frames')); }, self.options.timeoutMs || 15000);
-            function finish(error) {
-                if (finished) return;
-                if (error) {
-                    finished = true; clearTimeout(timer); self.cancelReady = null;
-                    if (!ready) reject(error);
-                    else if (!self.closing) self.emit('failure', error);
-                } else if (!ready) {
-                    ready = true; clearTimeout(timer); self.cancelReady = null;
-                    self.log.info('native camera: first decoded I420 frame (320x240)'); resolve();
-                }
-            }
-            self.cancelReady = function () { finish(Error('camera_closed')); };
-            var child = self.child = spawn('gst-launch-1.0', ['-q','fdsrc','fd=0','!',
-                'matroskademux','!','omxvp8dec','!','videoconvert','!','videoscale','!','videorate','!',
-                'video/x-raw,format=I420,width=320,height=240,framerate=10/1,pixel-aspect-ratio=1/1','!','fdsink','fd=1','sync=false'],
-                {stdio:['pipe','pipe','pipe']});
-            child.on('error', function (error) { if (self.child === child) finish(error); });
-            child.stdin.on('error', function (error) { if (!self.closing && self.child === child) finish(error); });
-            child.on('exit', function (code, signal) {
-                if (!self.closing && self.child === child) finish(Error('camera_decoder_exit_' + code + '_' + signal + ': ' + said.trim()));
-            });
-            child.stderr.on('data', function (bytes) { said = (said + String(bytes)).slice(-1000); });
-            function connect() {
-                if (self.closing || finished || self.child !== child) return;
-                var connected = false;
-                var source = self.source = (self.options.connect || net.connect)({host:'127.0.0.1', port:self.port});
-                source.on('connect', function () {
-                    if (self.closing || self.child !== child) { source.destroy(); return; }
-                    connected = true; source.pipe(child.stdin);
-                });
-                source.on('error', function (error) {
-                    if (self.closing || finished || self.child !== child) return;
-                    if (!connected && error.code === 'ECONNREFUSED') {
-                        source.destroy();
-                        self.retry = setTimeout(connect, 100);
-                    } else finish(error);
-                });
-                source.on('end', function () { if (!self.closing && self.child === child) finish(Error('camera_stream_ended')); });
-            }
-            connect();
-            child.stdout.on('data', function (bytes) {
-                if (self.closing || finished || self.child !== child) return;
-                clearTimeout(self.stall);
-                self.stall = setTimeout(function () { finish(Error('camera_stalled')); }, 5000);
-                // gst-launch's stdout is a byte stream; frame boundaries may split anywhere.
-                var data = Buffer.concat([self.buffer, bytes]);
-                var complete = Math.floor(data.length / FRAME_BYTES) * FRAME_BYTES;
-                self.buffer = Buffer.from(data.slice(complete));
-                for (var at = 0; at < complete && !self.closing; at += FRAME_BYTES) {
-                    finish(); self.emit('frame', data.slice(at, at + FRAME_BYTES));
-                }
-            });
+        if (this.mode !== 'stream') return this.photo.start();
+        return this.stream.start().then(function () {
+            self.note('camera: live 720p stream from Jibo\'s encoder, sent as it is');
+        }, function (error) {
+            if (!self.wanted) return;
+            return self.fallBack(error);
         });
     }
-    cleanup() {
-        if (this.cleaning) return this.cleaning;
-        var self = this, child = this.child; this.child = null;
-        clearTimeout(this.stall); clearTimeout(this.retry); this.stall = null; this.retry = null; this.buffer = Buffer.alloc(0);
-        if (this.source) { this.source.destroy(); this.source = null; }
-        var terminate = new Promise(function (resolve, reject) {
-            if (!child || child.exitCode !== null && child.exitCode !== undefined) return resolve();
-            var kill = setTimeout(function () { child.kill('SIGKILL'); }, 1000);
-            var deadline = setTimeout(function () { clearTimeout(kill); reject(Error('camera_decoder_cleanup_timeout')); }, 2000);
-            child.once('close', function () { clearTimeout(kill); clearTimeout(deadline); resolve(); });
-            child.kill('SIGTERM');
-        });
-        var stop = this.ownsStream ? this.post('/media/streaming/control', {}).then(function () {
-            self.ownsStream = false; self.log.info('native camera stopped');
-        }) : Promise.resolve();
-        this.cleaning = Promise.all([terminate, stop]).then(function () { self.cleaning = null; }, function (error) {
-            self.cleaning = null; throw error;
-        });
-        return this.cleaning;
+    // The stream is gone for this call; privacy mode ends the camera altogether.
+    fallBack(error) {
+        var self = this;
+        if (this.mode !== 'stream') return Promise.resolve();
+        if (error && error.message === 'privacy_enabled') { this.emit('failure', error); return Promise.resolve(); }
+        this.mode = 'photo'; this.stream.halt();
+        if (this.log) this.log.warn('camera: no live stream (' + why(error) + '); using preview photos instead');
+        if (!this.wanted) return Promise.resolve();
+        return this.photo.start().catch(function (failure) { self.emit('failure', failure); });
     }
+    // The helper asked for a keyframe.
+    restart(reason) { if (this.mode === 'stream' && this.wanted) this.stream.restart(reason || 'keyframe needed'); }
     stop() {
         this.wanted = false;
-        if (this.stopping) return this.stopping;
-        var self = this; this.closing = true;
-        if (this.cancelReady) this.cancelReady();
-        // A POST may still start the service after stop was requested. Wait for it,
-        // then send stop; never leave a late producer behind.
-        this.stopping = Promise.resolve(this.starting).catch(function () {}).then(function () { return self.cleanup(); })
-            .then(function () { self.stopping = null; }, function (error) { self.stopping = null; throw error; });
-        return this.stopping;
+        return Promise.all([this.stream ? this.stream.stop() : null, this.photo.stop()]);
+    }
+    summary() {
+        if (this.mode !== 'stream') return null;
+        var s = this.stream.stats, text = 'camera stream: ' + Math.round(s.bytes / 1024) + ' KiB sent, ' + s.streams + ' streams, ' + s.restarts +
+            ' restarts, pipe queued ' + queued(this.options.destination) + ' bytes';
+        s.bytes = 0;
+        return text;
     }
 }
-module.exports = NativeCamera;
+
+module.exports = CallCamera;
+module.exports.StreamCamera = StreamCamera;
+module.exports.record = record;
+module.exports.PIECE = PIECE;
