@@ -14,6 +14,7 @@ var CALL = {
     mute: ['mute', STOCK_ICON('mic'), B.neutral, B.engaged],
     camera: ['camera', OWN_ICON('video'), B.neutral, B.accent],
     tracking: ['tracking', STOCK_ICON('face'), B.neutral, B.accent],
+    rotate: ['rotate', OWN_ICON('rotate'), B.neutral, null],
     hangup: ['hangup', STOCK_ICON('cancel'), B.decline, null]
 };
 
@@ -32,7 +33,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.pendingCall = null; this.preparation = null; this.canceling = false; this.outgoingRequest = false;
             this.callTone = new CallTone(jibo, this.diagnostics);
             this.avatars = new Map(); this.serial = 0; this.art = null; this.decor = null;
-            this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = '';
+            this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = ''; this.videoTurns = 0;
             // Contacts paging: strip offset in px, the finger's drag, the spring and a requested page.
             this.slide = {x: 0, velocity: 0, target: 0}; this.dragging = null; this.animation = null; this.turning = null; this.pan = null;
         }
@@ -125,7 +126,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 // Each call starts with the configured microphone state and, once it is up, the
                 // camera on too; the person can switch it off. A new call never shows the previous
                 // call's last video frame.
-                if (!this.call || this.call.call_id !== value.call_id) { this.muted = !microphoneEnabled; this.camera = false; this.mediaState = 'connecting'; this.message = ''; this.callStarted = 0; this.disposeVideo(); }
+                if (!this.call || this.call.call_id !== value.call_id) { this.muted = !microphoneEnabled; this.camera = false; this.mediaState = 'connecting'; this.message = ''; this.callStarted = 0; this.videoTurns = 0; this.disposeVideo(); }
                 // Head tracking, like the camera, is per call.
                 this.call = value;
                 if (value.state === 'callStateReady' && !this.callStarted) {
@@ -139,7 +140,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 if (['callStateDiscarded', 'callStateError'].indexOf(value.state) >= 0) {
                     if (this.preparing) this.releasePreparation();
                     this.canceling = false;
-                    this.call = null; this.callStarted = 0; this.disposeVideo();
+                    this.call = null; this.callStarted = 0; this.videoTurns = 0; this.disposeVideo();
                     if (this.tracking) { this.tracking = false; controller.setTracking(false); }
                 }
             } else if (value.event === 'error') {
@@ -198,6 +199,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 mute: function () { if (!microphoneEnabled) return; self.muted = !self.muted; self.diagnostics.info('call: mute button -> microphone', self.muted ? 'muted' : 'on'); controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
                 camera: function () { self.camera = !self.camera; controller.setCamera(self.camera); self.render(); },
                 tracking: function () { self.look(!self.tracking, 'button'); },
+                rotate: function () { self.rotateVideo(); },
                 hangup: hangup
             };
 
@@ -388,8 +390,13 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             var photo = this.avatars.get(id);
             this.art.paintAvatar(surface, id + ':' + (photo ? 'photo' + photo.serial : name), photo && photo.image, layout.tone(id), layout.initials(name), initialsSize);
         }
+        rotateVideo() {
+            if (!this.call || this.call.state !== 'callStateReady' || !this.videoCanvas || this.canceling || this.leaving || this.closing) return;
+            this.videoTurns = (this.videoTurns + 1) % 4;
+            this.videoFrame(this.videoCanvas);
+        }
         videoFrame(canvas) {
-            if (!this.view || !global.PIXI || !this.call) return;
+            if (!this.view || !global.PIXI || !this.call || this.call.state !== 'callStateReady' || this.canceling || this.leaving || this.closing) return;
             var PIXI = global.PIXI;
             // Each call's media draws to its own canvas; a texture of an earlier one would freeze.
             if (this.videoCanvas !== canvas) this.disposeVideo();
@@ -404,18 +411,22 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             base.update();
             // Crop (never stretch) to the layout's box. A texture with its own
             // frame keeps it across updates; PIXI 4.6 resets a full one's frame.
-            var size = base.width + 'x' + base.height, previous = this.videoMode;
+            var size = base.width + 'x' + base.height + ':' + this.videoTurns, previous = this.videoMode;
             if (size !== this.videoSize) {
-                var fit = layout.video(base.width, base.height), crop = fit.crop, old = this.videoCrop;
+                var fit = layout.video(base.width, base.height, this.videoTurns), crop = fit.crop, old = this.videoCrop;
                 this.videoCrop = new PIXI.Texture(base, new PIXI.Rectangle(crop.x, crop.y, crop.width, crop.height));
                 this.videoSprite.texture = this.videoCrop;
                 if (old) old.destroy(false);
-                this.videoSprite.position.set(fit.rect.x, fit.rect.y);
-                this.videoSprite.width = fit.rect.width; this.videoSprite.height = fit.rect.height;
+                this.videoSprite.anchor.set(0.5);
+                this.videoSprite.position.set(fit.rect.x + fit.rect.width / 2, fit.rect.y + fit.rect.height / 2);
+                this.videoSprite.rotation = fit.rotation;
+                var sideways = this.videoTurns % 2 !== 0;
+                this.videoSprite.width = sideways ? fit.rect.height : fit.rect.width;
+                this.videoSprite.height = sideways ? fit.rect.width : fit.rect.height;
                 this.videoSize = size; this.videoMode = fit.mode;
             }
             this.videoSprite.visible = true;
-            // Video takes the caller's place, and its shape picks the layout.
+            // Use the upright/corrected image's shape for the call layout.
             if (created || previous !== this.videoMode) this.render();
         }
         disposeVideo() {
@@ -526,7 +537,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 var mine = (prefix ? 'landscape' : 'portrait') === screen;
                 if (!mine) return;
                 layout.callButtons.forEach(function (name) {
-                    var on = !!engaged[name], usable = ready || name === 'hangup';
+                    var on = !!engaged[name], usable = name === 'rotate' ? ready && !!self.videoSprite : ready || name === 'hangup';
                     self.show(prefix + name, usable && !on);
                     if (CALL[name][3]) self.show(prefix + name + 'On', usable && on);
                     if (!prefix) self.show(name + '-text', usable);

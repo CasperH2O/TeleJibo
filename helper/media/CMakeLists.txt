@@ -42,6 +42,10 @@ add_executable(telegram-helper helper.cpp)
 target_link_libraries(telegram-helper PRIVATE jibo_media "${TDLIB_LIBRARY}")
 set_target_properties(telegram-helper PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN")
 
+add_executable(video-frame-test ../tests/video-frame-test.cpp)
+target_include_directories(video-frame-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(video-frame-test PRIVATE jibo_media)
+
 add_executable(account-test ../tests/account-test.cpp "${tg}/third-party/json11.cpp")
 target_compile_features(account-test PRIVATE cxx_std_20)
 target_include_directories(account-test PRIVATE "${tg}" "${CMAKE_CURRENT_SOURCE_DIR}")

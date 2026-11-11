@@ -7,6 +7,7 @@ toward the lower right (jibo-ui-classic tokens, iconography.style). Writes:
   icon.png                              330x330 store and main-menu glyph (BEacon tints the tile)
   telejibo/resources/icons/video.png    265x265 action-button icon (camera toggle)
   telejibo/resources/icons/settings.png 265x265 action-button icon (settings)
+  telejibo/resources/icons/rotate.png   265x265 action-button icon (rotate video)
 
 PNGs are 8-bit RGBA with only IHDR/IDAT/IEND chunks, and deterministic: the same bytes on
 every run. Shapes are 24-unit outlines (Feather-like proportions), supersampled 4x4.
@@ -79,6 +80,13 @@ def camera():
 
 def cog():
     return [(gear(12, 12, 7.2, 10.6, 3.3, 8, 3.4), WHITE)]
+
+
+def rotate_arrow():
+    def arc(px, py):
+        dx, dy = px - 12, py - 12
+        return 6.2 <= math.hypot(dx, dy) <= 8.8 and not (dx > 0 and dy < -2)
+    return [(arc, WHITE), (convex([(15, 3), (22, 3), (22, 10)]), WHITE)]
 
 
 def raster(width, height, glyph, scale, origin):
@@ -189,6 +197,8 @@ def main():
         write('telejibo/resources/icons/video.png', 265, 265, icon(265, 265, camera(), 138, (132.5, 132.5), 58, anchor=(11.18, 12)))
     if wanted('settings'):
         write('telejibo/resources/icons/settings.png', 265, 265, icon(265, 265, cog(), 128, (132, 132), 60))
+    if wanted('rotate'):
+        write('telejibo/resources/icons/rotate.png', 265, 265, icon(265, 265, rotate_arrow(), 138, (132.5, 132.5), 58))
 
 
 if __name__ == '__main__':

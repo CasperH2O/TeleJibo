@@ -158,3 +158,78 @@ test('close keeps its loader visible throughout cleanup and never requests logou
     assert.deepEqual(f.sent, []);
     assert.equal(f.screen.view, null);
 });
+
+// A minimal texture fixture exercises call state and ownership. The private
+// browser check separately verifies the actual PIXI transforms and pixels.
+function videoFixture() {
+    const f = fixture(), textures = [];
+    class Texture {
+        constructor(base, frame) { this.baseTexture = base; this.frame = frame; this.destroyed = 0; textures.push(this); }
+        destroy() { ++this.destroyed; }
+        static fromCanvas(canvas) {
+            const base = {width: canvas.width, height: canvas.height,
+                update() { this.width = canvas.width; this.height = canvas.height; }};
+            return new Texture(base);
+        }
+    }
+    class Sprite {
+        constructor(texture) { this.texture = texture; this.anchor = {set() {}}; this.position = {set(x,y) { this.x=x; this.y=y; }}; }
+        destroy() { this.destroyed = true; }
+    }
+    global.PIXI = {Texture, Sprite, Rectangle: class {constructor(x,y,width,height) { Object.assign(this,{x,y,width,height}); }}};
+    f.screen.view.stage = {addChildAt() {}};
+    f.screen.event({event: 'call', call_id: 15, name: 'Alex', state: 'callStateReady'});
+    return {...f, textures};
+}
+
+test('remote upright frames pick the layout; Rotate corrects all four directions without touching call media', () => {
+    const before = global.PIXI;
+    try {
+        const f = videoFixture(), canvas = {width: 360, height: 480};
+        assert.equal(f.screen.screen, 'portrait');
+        assert.equal(f.components.get('rotate').display.visible, false);
+        f.screen.videoFrame(canvas);
+        assert.equal(f.screen.screen, 'portrait');
+        assert.equal(f.components.get('rotate').display.visible, true);
+        const sent = [...f.sent];
+        for (let i = 1; i <= 4; ++i) {
+            f.screen.rotateVideo();
+            assert.equal(f.screen.videoTurns, i % 4);
+            assert.equal(f.screen.screen, i % 2 ? 'landscape' : 'portrait');
+            assert.equal(f.screen.videoSprite.rotation, (i % 4) * Math.PI / 2);
+        }
+        assert.deepEqual(f.sent, sent);
+        assert.equal(f.controller.releases, 0);
+        f.screen.event({event: 'call', call_id: 15, state: 'callStateDiscarded'});
+        assert.ok(f.textures.every(t => t.destroyed === 1));
+        assert.equal(f.screen.videoCanvas, null);
+        f.screen.halt();
+    } finally { global.PIXI = before; }
+});
+
+test('manual rotation survives frame resizing and canvas replacement, resets on a new call, and ignores late frames', () => {
+    const before = global.PIXI;
+    try {
+        const f = videoFixture(), canvas = {width: 640, height: 480};
+        f.screen.videoFrame(canvas); f.screen.rotateVideo();
+        assert.equal(f.screen.screen, 'portrait');
+        canvas.width = 480; canvas.height = 360; f.screen.videoFrame(canvas);
+        f.screen.videoFrame({width: 320, height: 240});
+        assert.equal(f.screen.videoTurns, 1);
+        assert.equal(f.screen.screen, 'portrait');
+        const image = f.screen.videoCanvas, crop = f.screen.videoCrop;
+        f.screen.cancelCall(); f.screen.rotateVideo(); f.screen.videoFrame(canvas);
+        assert.equal(f.screen.videoTurns, 1); assert.equal(f.screen.videoCanvas, image);
+        assert.equal(f.screen.videoCrop, crop);
+        f.screen.event({event: 'call', call_id: 15, state: 'callStateDiscarded'});
+        f.screen.videoFrame(canvas); assert.equal(f.screen.videoSprite, null);
+        f.screen.event({event: 'call', call_id: 16, state: 'callStateReady'});
+        assert.equal(f.screen.videoTurns, 0);
+        assert.equal(f.screen.screen, 'portrait');
+        f.screen.videoFrame(canvas); assert.equal(f.screen.screen, 'landscape');
+        f.screen.leaving = true; const count = f.textures.length;
+        f.screen.videoFrame({width: 360, height: 480}); f.screen.rotateVideo();
+        assert.equal(f.screen.videoTurns, 0); assert.equal(f.textures.length, count);
+        f.screen.disposeVideo(); f.screen.halt();
+    } finally { global.PIXI = before; }
+});

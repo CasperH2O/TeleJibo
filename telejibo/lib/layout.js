@@ -28,7 +28,7 @@ var text = {
     title: 'TeleJibo', connecting: 'Connecting…', closing: 'Closing…', signedOut: 'Signed out',
     videoCall: 'Video call', noCalls: 'No calls', online: 'Online', missed: 'Missed call',
     incoming: 'Incoming video call', outgoing: 'Calling…', decline: 'Decline', accept: 'Answer', cancel: 'Cancel',
-    mute: 'Mute', unmute: 'Unmute', micOff: 'Mic off', camera: 'Camera', tracking: 'Look at me', end: 'End', cameraOff: 'Camera off',
+    mute: 'Mute', unmute: 'Unmute', micOff: 'Mic off', camera: 'Camera', tracking: 'Look at me', rotate: 'Rotate', end: 'End', cameraOff: 'Camera off',
     trackingUnavailable: 'Head tracking is unavailable',
     linkTitle: 'Link Telegram', steps: ['Open Telegram on your phone', 'Settings, Devices, Link Desktop Device', 'Scan the code'],
     waitingScan: 'Waiting for scan…',
@@ -73,7 +73,7 @@ var portrait = {
     video: {x: 0, y: 0, width: 405, height: 720},
     avatar: {x: 203, y: 360, size: 220, initials: 96},
     name: {x: 480, y: 135, width: 680, size: 64}, kind: {x: 480, y: 198, width: 680, size: 36},
-    emojis: {x: 480, y: 560, width: 680, size: 32}, hint: {x: 203, y: 520, width: 340, size: 30},
+    emojis: {x: 480, y: 560, width: 540, size: 32}, hint: {x: 203, y: 520, width: 340, size: 30},
     row: {x: 480, y: 290, button: 132, gap: 36, caption: 40, captionGap: 22}
 };
 // Landscape streams fill a 16:9 box above a row of controls.
@@ -82,7 +82,7 @@ var landscape = {
     chip: {x: 216, y: 440, height: 52, padding: 18, size: 36, maxWidth: 560}, emojis: {right: 1064, y: 440},
     row: {y: 540, button: 120, gap: 40}
 };
-var callButtons = ['mute', 'camera', 'tracking', 'hangup'];
+var callButtons = ['mute', 'camera', 'tracking', 'hangup', 'rotate'];
 
 var qr = {
     title: {x: 112, y: 104, width: 640, size: 80},
@@ -169,18 +169,23 @@ function duration(milliseconds) {
     var two = function (n) { return (n < 10 ? '0' : '') + n; };
     return (hours ? hours + ':' : '') + two(Math.floor(seconds / 60) % 60) + ':' + two(seconds % 60);
 }
-// Portrait streams take the left column, anything else the 16:9 box.
-// The source is cropped (never stretched) to the box's aspect ratio.
-function video(width, height) {
-    var mode = height > width ? 'portrait' : 'landscape', box = (mode === 'portrait' ? portrait : landscape).video;
-    var scale = Math.max(box.width / width, box.height / height);
-    var cropWidth = Math.min(width, Math.round(box.width / scale)), cropHeight = Math.min(height, Math.round(box.height / scale));
-    return {mode: mode, rect: {x: box.x, y: box.y, width: box.width, height: box.height},
+// The helper supplies upright frames. Optional clockwise quarter-turns correct a
+// peer's missing/wrong metadata locally. Choose the layout after that correction,
+// and express the centred crop in the original texture's coordinates.
+function video(width, height, turns) {
+    turns = turns || 0;
+    var sideways = turns % 2 !== 0, w = sideways ? height : width, h = sideways ? width : height;
+    var mode = h > w ? 'portrait' : 'landscape', box = (mode === 'portrait' ? portrait : landscape).video;
+    var scale = Math.max(box.width / w, box.height / h);
+    var cropWidth = Math.min(w, Math.round(box.width / scale)), cropHeight = Math.min(h, Math.round(box.height / scale));
+    if (sideways) { var swap = cropWidth; cropWidth = cropHeight; cropHeight = swap; }
+    return {mode: mode, rotation: turns * Math.PI / 2, rect: {x: box.x, y: box.y, width: box.width, height: box.height},
         crop: {x: Math.floor((width - cropWidth) / 2), y: Math.floor((height - cropHeight) / 2), width: cropWidth, height: cropHeight}};
 }
 // In-call controls: one row, captions under the portrait row only.
 function rowButton(mode, index) {
     if (mode === 'portrait') {
+        if (callButtons[index] === 'rotate') return {x: 1092, y: 484, size: 96};
         var r = portrait.row;
         return {x: r.x + index * (r.button + r.gap), y: r.y, size: r.button};
     }

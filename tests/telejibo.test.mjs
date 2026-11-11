@@ -32,17 +32,21 @@ test('every control sits inside the round-cornered safe area', () => {
 });
 
 test('controls are at least the 64 px touch floor and contact tiles match the stock 330 px tile', () => {
-    for (const mode of ['portrait', 'landscape']) for (let i = 0; i < 4; ++i) assert.ok(layout.rowButton(mode, i).size >= 64);
+    for (const mode of ['portrait', 'landscape']) for (let i = 0; i < layout.callButtons.length; ++i) assert.ok(layout.rowButton(mode, i).size >= 64);
     assert.ok(layout.header.settings.size >= 64);
     assert.equal(layout.contacts.width, 330);
     assert.equal(layout.actionScale(132), 0.5);
 });
 
-test('portrait row buttons do not overlap and landscape row is centred', () => {
-    const p = [0, 1, 2, 3].map((i) => layout.rowButton('portrait', i));
-    for (let i = 1; i < 4; ++i) assert.ok(p[i].x >= p[i - 1].x + p[i - 1].size);
-    const l = [0, 1, 2, 3].map((i) => layout.rowButton('landscape', i));
-    assert.equal(Math.round((l[0].x + l[3].x + l[3].size) / 2), 640);
+test('call buttons do not overlap and the full landscape row is centred', () => {
+    for (const mode of ['portrait', 'landscape']) {
+        const buttons = layout.callButtons.map((_, i) => layout.rowButton(mode, i));
+        for (let i = 0; i < buttons.length; ++i) for (let j = i + 1; j < buttons.length; ++j) {
+            const a = buttons[i], b = buttons[j];
+            assert.ok(a.x + a.size <= b.x || b.x + b.size <= a.x || a.y + a.size <= b.y || b.y + b.size <= a.y);
+        }
+        if (mode === 'landscape') assert.equal((buttons[0].x + buttons.at(-1).x + buttons.at(-1).size) / 2, 640);
+    }
 });
 
 test('contacts fill down each column, most recent top left', () => {

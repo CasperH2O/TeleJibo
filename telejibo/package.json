@@ -1,6 +1,6 @@
 {
   "name": "@be/telejibo",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Bring your Telegram video calls to Jibo. Tap a contact, answer a friend, and let Jibo follow your face. Unofficial; microphone capture currently disabled.",
   "main": "index.js",
   "config": {

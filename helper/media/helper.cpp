@@ -13,6 +13,7 @@
 #include "api/video/i420_buffer.h"
 #include "rtc_base/time_utils.h"
 #include "pipe-media.h"
+#include "video-frame.h"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -171,10 +172,8 @@ struct VideoSink : rtc::VideoSinkInterface<webrtc::VideoFrame> {
         ++frames; width = frame.width(); height = frame.height();
         if (output && rtc::TimeMicros() - last >= 100000) {
             last = rtc::TimeMicros();
-            float scale = std::min(1.f, std::min(640.f / frame.width(), 480.f / frame.height()));
-            int w = std::max(2, int(frame.width() * scale) & ~1), h = std::max(2, int(frame.height() * scale) & ~1);
-            auto pixels = webrtc::I420Buffer::Create(w, h);
-            pixels->CropAndScaleFrom(*frame.video_frame_buffer()->ToI420());
+            auto pixels = jibo_media::displayFrame(frame);
+            const int w = pixels->width(), h = pixels->height();
             std::vector<uint8_t> bytes(12 + w * h * 3 / 2);
             memcpy(bytes.data(), "JIVF", 4);
             for (int i = 0; i < 4; ++i) { bytes[4+i] = uint8_t(w >> (i*8)); bytes[8+i] = uint8_t(h >> (i*8)); }
