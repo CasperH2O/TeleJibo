@@ -41,7 +41,7 @@ class StreamCamera extends EventEmitter {
         var self = this, options = this.options, generation = ++this.generation, id = serial = (serial + 1) >>> 0 || 1, index = 0;
         this.running = true; this.startedAt = Date.now(); this.stats.streams++;
         this.starting = new Promise(function (resolve, reject) {
-            var first = true, attempts = 0;
+            var first = true, attempts = 0, dropped = false;
             function current() { return self.running && generation === self.generation; }
             function fail(error) {
                 if (!current()) return;
@@ -51,8 +51,10 @@ class StreamCamera extends EventEmitter {
             function data(bytes) {
                 if (!current()) return;
                 self.lastData = Date.now();
-                // The stream cannot lose bytes and stay readable, so a full pipe means a new stream.
-                if (queued(self.destination) > (options.queueLimit || QUEUE_LIMIT)) { self.restart('the helper is not reading'); return; }
+                // The stream cannot lose bytes and stay readable, so a full pipe means a new stream,
+                // and nothing more of this one: later pieces would follow the gap unnoticed.
+                if (dropped) return;
+                if (queued(self.destination) > (options.queueLimit || QUEUE_LIMIT)) { dropped = true; self.restart('the helper is not reading'); return; }
                 try {
                     for (var at = 0; at < bytes.length; at += PIECE) self.destination.write(record(id, index++, bytes.slice(at, at + PIECE)));
                 } catch (error) { fail(error); return; }
@@ -67,9 +69,10 @@ class StreamCamera extends EventEmitter {
                     if (!current()) { try { handle.stop(); } catch (_) {} return; }
                     self.handle = handle; self.lastData = Date.now();
                     // BEam ends the stream by itself (privacy mode, the encoder stopping) without telling us.
+                    // Until the first bytes the start-up deadline applies, not the stall check.
                     self.watch = setInterval(function () {
                         if (self.isPrivate()) fail(Error('privacy_enabled'));
-                        else if (Date.now() - self.lastData > (options.stallMs || 3000)) fail(Error('camera_stream_stalled'));
+                        else if (!first && Date.now() - self.lastData > (options.stallMs || 3000)) fail(Error('camera_stream_stalled'));
                     }, 500);
                 }, function (error) {
                     // The previous stream is still closing: BEam frees the camera a moment after stop().

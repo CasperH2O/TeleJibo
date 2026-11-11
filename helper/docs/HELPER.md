@@ -17,7 +17,9 @@ The TeleJibo skill keeps the file at `<dataRoot>/api.json`.
 Commands are JSON lines such as `{"method":"status"}`, `{"method":"contacts","offset":0}`,
 `{"method":"logout"}` and `{"method":"close"}`. Authorization events carry the
 current QR link or password-required state. Contacts are ordered by your main chat
-list (most recent conversation first), then the rest. For each contact shown, an
+list (most recent conversation first), then the rest. A page is sent at once and
+again as each contact's details arrive; `"complete": true` marks the one where every
+contact has been answered (a failed lookup counts). For each contact shown, an
 `avatar` event carries its small profile photo (JPEG, base64, at most 64 KB) once;
 only files inside TDLib's own photo and file directories are read. Lines are at
 most 128 KB. Keep QR links, passwords, contact and avatar events out of logs. See
@@ -50,7 +52,8 @@ new stream and starts with a keyframe. The hardware encoder cannot be asked for 
 keyframe, so when the far side needs one, or a piece is missing, or the encoder
 falls more than about a second behind, the helper emits
 `{"event":"camera","state":"restart"}` (at most once per two seconds) and the
-skill starts a new stream. While `JIWM` records arrive the robot sends VP8 only.
+skill starts a new stream. With `--pipe-media` the robot offers VP8 only, since the
+camera stream is VP8; this holds for the `JICF` fallback too.
 `JICF` frames are encoded by the stock VP8 encoder; the newest complete frame is
 used and the header lets the helper find the next whole record after a partial one.
 

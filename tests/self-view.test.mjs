@@ -71,6 +71,24 @@ test('self view: it stays live, lets go of old video, and starts over for a new 
     assert.equal(p.sources.length, 2, 'nothing after stop');
 });
 
+test('self view: after an overflow or a decoder error it waits for the next stream, never reopening mid-stream', () => {
+    const p = page(), view = new SelfView(p.host, () => {});
+    view.stream(Buffer.alloc(5 * 1024 * 1024), 1);
+    view.stream(Buffer.from([1]), 1);
+    assert.equal(p.sources.length, 1); assert.equal(view.queued, 0, 'the backlog is let go');
+    view.stream(Buffer.from([2]), 1);
+    assert.equal(p.sources.length, 1, 'the rest of that stream cannot be decoded');
+    view.stream(Buffer.from([3]), 2);
+    assert.equal(p.sources.length, 2, 'a new stream starts with its header');
+    p.sources[1].addSourceBuffer = () => { throw Error('NotSupportedError'); };
+    p.sources[1].open();
+    view.stream(Buffer.from([4]), 2);
+    assert.equal(p.sources.length, 2, 'not reopened after a decoder error');
+    view.stream(Buffer.from([5]), 3); p.sources[2].open();
+    assert.deepEqual([...p.sources[2].buffers[0].appended[0]], [5]);
+    view.stop();
+});
+
 test('self view: preview frames are drawn directly, cropped to the tile; a page without MediaSource ignores the stream', () => {
     const p = page(), painted = [], view = new SelfView(p.host, canvas => painted.push(canvas));
     view.frame(Buffer.alloc(320 * 240 * 3 / 2), 320, 240, (bytes, w, h, rgba) => rgba.fill(255));

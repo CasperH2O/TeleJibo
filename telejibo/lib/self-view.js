@@ -18,15 +18,17 @@ class SelfView {
         this.host = host; this.onPaint = onPaint;
         this.canvas = host.document.createElement('canvas'); this.canvas.width = WIDTH; this.canvas.height = HEIGHT;
         this.video = null; this.source = null; this.buffer = null; this.url = null; this.queue = []; this.queued = 0;
-        this.serial = null; this.timer = null; this.raw = null; this.rawCanvas = null; this.closed = false;
+        this.serial = null; this.broken = null; this.timer = null; this.raw = null; this.rawCanvas = null; this.closed = false;
     }
     static supported(host) {
         return !!(host && host.document && host.MediaSource && host.URL && (!host.MediaSource.isTypeSupported || host.MediaSource.isTypeSupported(MIME)));
     }
     // A piece of the camera's live stream; a new serial is a new stream with its own header.
+    // Only a stream's start can be decoded: after an overflow or a decoder error, wait for the next.
     stream(bytes, serial) {
-        if (this.closed || !SelfView.supported(this.host)) return;
-        if (serial !== this.serial || this.queued > QUEUE_LIMIT) { this.reset(); this.serial = serial; this.open(); }
+        if (this.closed || !SelfView.supported(this.host) || serial === this.broken) return;
+        if (this.queued > QUEUE_LIMIT) { this.fail(); return; }
+        if (serial !== this.serial) { this.reset(); this.broken = null; this.serial = serial; this.open(); }
         // The camera reuses its buffers: keep a copy.
         var copy = new Uint8Array(bytes.length); copy.set(bytes);
         this.queue.push(copy); this.queued += copy.length;
@@ -43,7 +45,7 @@ class SelfView {
                 var buffer = self.buffer = source.addSourceBuffer(MIME);
                 buffer.mode = 'sequence';
                 buffer.addEventListener('updateend', function () { self.pump(); });
-            } catch (_) { self.reset(); return; }
+            } catch (_) { self.fail(); return; }
             self.pump();
         });
         if (!this.timer) this.timer = setInterval(function () { self.paint(); }, PAINT_MS);
@@ -62,8 +64,9 @@ class SelfView {
             var next = this.queue.shift(); this.queued -= next.length;
             buffer.appendBuffer(next);
             if (video.paused && video.play) { var playing = video.play(); if (playing && playing.catch) playing.catch(function () {}); }
-        } catch (_) { this.reset(); }
+        } catch (_) { this.fail(); }
     }
+    fail() { var serial = this.serial; this.reset(); this.broken = serial; }
     // A decoded 4:3 preview frame (I420), from the photo fallback.
     frame(i420, width, height, fromI420) {
         if (this.closed) return;

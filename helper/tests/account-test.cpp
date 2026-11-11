@@ -53,6 +53,8 @@ int main() {
         check(type(requests.back()) == "getChats" && requests.back()["@extra"].string_value() == "recent:1", "recent chats requested");
         // Group chats have negative ids; private chats are ordered by recency.
         account.update(Object{{"@type", "chats"}, {"chat_ids", Array{6, -100, 5}}, {"@extra", "recent:1"}});
+        // The page is sent at once, before any names: whoever searches it must wait for `complete`.
+        check(events.back()["event"].string_value() == "contacts" && !events.back()["complete"].bool_value(), "a new page is incomplete");
         user(2, "userTypeBot"); full(2, true);
         user(3, "userTypeDeleted"); full(3, true);
         user(4, "userTypeRegular"); full(4, false);
@@ -65,6 +67,7 @@ int main() {
                               {"profile_photo", photo(60, false)}, {"@extra", "u:1:6"}});
         check(std::any_of(requests.begin(), requests.end(), [](const Json &r) { return type(r) == "downloadFile" && r["file_id"].int_value() == 60; }), "avatar download requested");
         full(6, true);
+        check(events.back()["complete"].bool_value(), "a page is complete once every contact is answered");
         account.update(Object{{"@type", "file"}, {"local", Object{{"is_downloading_completed", true}, {"path", "/state/files/six.jpg"}}}, {"@extra", "a:6"}});
         check(avatars.size() == 2 && avatars[0].first == 5 && avatars[1] == std::make_pair(int64_t(6), std::string("/state/files/six.jpg")), "avatars forwarded once each");
         const auto ordered = events.back()["users"].array_items();
@@ -81,6 +84,11 @@ int main() {
                               {"profile_photo", photo(50, true)}, {"@extra", "u:2:5"}});
         check(avatars.size() == 3 && avatars[2].first == 5, "avatars sent again for a reloaded page");
         full(5, true); user(4, "userTypeRegular"); full(4, false); user(6, "userTypeRegular"); full(6, true);
+        check(!events.back()["complete"].bool_value(), "a page waits for contacts not yet answered");
+        // A failed lookup counts as answered, quietly, so the page still completes.
+        for (const auto *tag : {"u:2:2", "f:2:2", "u:2:3", "f:2:3", "u:1:2"})
+            account.update(Object{{"@type", "error"}, {"code", 400}, {"message", "failed"}, {"@extra", tag}});
+        check(events.back()["event"].string_value() == "contacts" && events.back()["complete"].bool_value(), "failed lookups complete the page");
         account.command(Object{{"method", "call.start"}, {"user_id", 4}});
         check(events.back()["reason"].string_value() == "contact_unavailable", "unavailable contact rejected");
         account.command(Object{{"method", "call.start"}, {"user_id", 6}});

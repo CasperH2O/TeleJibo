@@ -67,13 +67,26 @@ test('voice: the listener takes turns until an answer is heard, and stop cancels
     assert.equal(new voice.Listener({}).start(() => true), false);
 });
 
-function screenFixture(pages) {
+// staged: like the real helper, each page comes first without names (complete: false), then complete.
+// failing: every contacts request fails.
+function screenFixture(pages, {staged = false, failing = false} = {}) {
     const s = speech(), sent = [];
     const jibo = Object.assign(s.jibo, {face: {views: {ActionData: {CALLBACK: 'callback'}}}, sound: {add: () => ({play() {}, stop() {}}), remove() {}}});
     const log = {info() {}, debug() {}, warn() {}, error() {}};
     const controller = {settings: {background: false, orientation: 'auto', selfView: true, diagnostics: false}, setSetting() {},
         prepareMedia: () => Promise.resolve(), releaseMedia: () => Promise.resolve(),
-        send(value) { sent.push(value); if (value.method === 'contacts') setImmediate(() => screen.event({event: 'contacts', offset: value.offset, total: pages.length * 6, users: pages[value.offset / 6] || []})); return true; },
+        send(value) {
+            sent.push(value);
+            if (value.method !== 'contacts') return true;
+            const page = {event: 'contacts', offset: value.offset, total: pages.length * 6}, users = pages[value.offset / 6] || [];
+            if (failing) setImmediate(() => screen.event({event: 'error', reason: 'telegram_request_failed', operation: 'internal'}));
+            else if (!staged) setImmediate(() => screen.event({...page, users}));
+            else {
+                setImmediate(() => screen.event({...page, complete: false, users: users.map(u => ({id: u.id, name: '', available: false}))}));
+                setTimeout(() => screen.event({...page, complete: true, users}), 5);
+            }
+            return true;
+        },
         hangup(id) { sent.push({method: 'call.hangup', call_id: id}); }, setCamera() {}, setTracking: () => Promise.resolve(true)};
     const Screen = createScreen(jibo, class {constructor() { this.log = log; }}, controller);
     const screen = new Screen(), components = new Map();
@@ -118,6 +131,27 @@ test('screen: a spoken no, or the Cancel button, drops the question; an unknown 
         assert.equal(f.components.get('message').text, 'No contact called ' + name);
         assert.equal(f.components.get('message').display.visible, true);
     }
+    f.screen.halt();
+});
+
+test("screen: a search by name waits for each page's names, as the real helper sends them late", async () => {
+    const f = screenFixture([[person(1, 'Bob'), person(2, 'Carl')], [person(3, 'Anna Lee'), person(4, 'Dave')]], {staged: true});
+    f.screen.spoken = 'anna'; f.screen.event({event: 'authorization', state: 'ready'});
+    for (let i = 0; i < 10 && !f.screen.confirm; ++i) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(f.sent.filter(v => v.method === 'contacts').map(v => v.offset), [0, 6, 0], 'each page once, then back to the first');
+    assert.equal(f.screen.confirm && f.screen.confirm.id, 3);
+    assert.equal(f.screen.screen, 'incoming');
+    f.screen.halt();
+});
+
+test('screen: a contacts page that fails ends a search by name instead of waiting for good', async () => {
+    const f = screenFixture([[person(1, 'Anna')]], {failing: true});
+    f.screen.spoken = 'anna'; f.screen.event({event: 'authorization', state: 'ready'});
+    assert.equal(f.screen.screen, 'waiting');
+    await settle();
+    assert.equal(f.screen.search, null); assert.equal(f.screen.spoken, '');
+    assert.equal(f.screen.screen, 'contacts');
+    assert.equal(f.components.get('message').text, 'Please try again');
     f.screen.halt();
 });
 

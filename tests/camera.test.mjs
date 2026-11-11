@@ -75,7 +75,9 @@ test('restarts are spaced out and a full helper pipe starts over instead of drop
     d.streams[1].onData(Buffer.alloc(4));
     d.pipe.writableLength = 101; d.streams[1].onData(Buffer.alloc(4));
     assert.equal(d.pipe.writes.length, 2, 'not written into a full pipe');
-    d.pipe.writableLength = 0; await tick(60);
+    d.pipe.writableLength = 0; d.streams[1].onData(Buffer.alloc(4));
+    assert.equal(d.pipe.writes.length, 2, 'nothing more of a stream with a gap, even once the pipe drains');
+    await tick(60);
     assert.equal(d.streams.length, 3);
     await c.stop();
 });
@@ -111,6 +113,16 @@ test('a stream that goes quiet falls back to photos; privacy mode ends the camer
     assert.equal(e.photo.started, 0); assert.equal(e.streams[0].stopped, 1);
     const g = devices(); g.jibo.privacyController.enabled = true;
     await assert.rejects(new StreamCamera(g.jibo, {destination: g.pipe}).start(), /privacy_enabled/);
+});
+
+test('a slow first picture is given the start-up deadline, not the stall check', async () => {
+    const d = devices(), c = camera(d, {stallMs: 30, streamTimeoutMs: 2000});
+    let ready = false; const started = c.start().then(() => { ready = true; });
+    await tick(600);
+    assert.equal(c.mode, 'stream'); assert.equal(d.streams[0].stopped, 0); assert.equal(d.photo.started, 0);
+    d.streams[0].onData(Buffer.alloc(4)); await started;
+    assert.equal(ready, true);
+    await c.stop();
 });
 
 test('without the stream API, or when told not to use it, the camera is the photo path with its trial frame', async () => {

@@ -127,6 +127,8 @@ public:
             // Recency and avatars are best effort: fall back quietly.
             if (extra == "recent:" + std::to_string(generation)) { loadedContacts = true; loadPage(); return; }
             if (extra.rfind("recent:", 0) == 0 || extra.rfind("a:", 0) == 0 || extra.rfind("p:", 0) == 0) return;
+            // A contact's details are best effort too, but its page is complete only once every reply is in.
+            if (extra.rfind("u:", 0) == 0 || extra.rfind("f:", 0) == 0) { contactFailed(extra); return; }
             if (extra == "create_call") callStarting = false;
             emit(Object{{"event", "error"}, {"reason", "telegram_request_failed"},
                         {"code", value["code"].int_value()}, {"operation", safeOperation(extra)}});
@@ -202,6 +204,7 @@ private:
     struct Contact {
         std::string name;
         bool known = false, regular = false, callable = false, video = false;
+        bool userDone = false, fullDone = false;   // getUser / getUserFullInfo answered or failed
         bool eligible() const { return known && regular && callable && video; }
     };
     std::vector<int64_t> contacts;
@@ -256,13 +259,24 @@ private:
     }
     void emitPage() {
         Array rows;
+        bool complete = true;
         for (int i = pageOffset; i < std::min(int(contacts.size()), pageOffset + 6); ++i) {
             const auto id = contacts[i]; const auto &contact = page.at(id);
+            complete = complete && contact.userDone && contact.fullDone;
             if (!contact.known || contact.regular)
                 rows.emplace_back(Object{{"id", double(id)}, {"name", contact.name},
                                          {"available", contact.eligible()}});
         }
-        emit(Object{{"event", "contacts"}, {"offset", pageOffset}, {"total", int(contacts.size())}, {"users", rows}});
+        emit(Object{{"event", "contacts"}, {"offset", pageOffset}, {"total", int(contacts.size())}, {"users", rows},
+                    {"complete", complete}});
+    }
+    void contactFailed(const std::string &tag) {
+        const auto prefix = tag.substr(0, 2) + std::to_string(generation) + ":";
+        if (tag.rfind(prefix, 0) != 0) return;
+        auto found = page.find(number(Json(tag.substr(prefix.size()))));
+        if (found == page.end()) return;
+        (tag[0] == 'u' ? found->second.userDone : found->second.fullDone) = true;
+        emitPage();
     }
     void receiveContact(const Json &value, const std::string &tag) {
         const auto prefix = (type(value) == "user" ? "u:" : "f:") + std::to_string(generation) + ":";
@@ -274,11 +288,12 @@ private:
         if (type(value) == "user") {
             contact.name = displayName(value);
             contact.regular = type(value["type"]) == "userTypeRegular" && id != self;
-            contact.known = true;
+            contact.known = true; contact.userDone = true;
             if (contact.regular) requestAvatar(id, value["profile_photo"]);
         } else {
             contact.callable = value["can_be_called"].bool_value();
             contact.video = value["supports_video_calls"].bool_value();
+            contact.fullDone = true;
         }
         emitPage();
     }

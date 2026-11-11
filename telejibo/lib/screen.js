@@ -19,6 +19,8 @@ var CALL = {
 };
 // One button per video orientation, in one place; render shows the current one.
 var ORIENTATION_ICON = {auto: OWN_ICON('rotate'), landscape: OWN_ICON('landscape'), portrait: OWN_ICON('portrait')};
+// ms to wait for a contacts page's names before judging what has come.
+var PAGE_WAIT = 5000;
 function capital(value) { return value.charAt(0).toUpperCase() + value.slice(1); }
 
 module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
@@ -60,7 +62,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         open(result) {
             if (this.view) return;
             this.closing = null; this.state = 'starting'; this.message = '';
-            this.spoken = voice.callee(result && result.asr && result.asr.text); this.search = null; this.confirm = null; this.notice = '';
+            this.dropSearch(); this.spoken = voice.callee(result && result.asr && result.asr.text); this.confirm = null; this.notice = '';
             var self = this, views = jibo.face.views;
             if (!views || !views.createView || !views.changeView || !global.PIXI) { this.exit({noElementsOfSurprise: true}); return; }
             this.view = views.createView('View', this.config(views));
@@ -163,6 +165,8 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 this.outgoingRequest = false;
                 if (this.call && this.call.outgoing && !this.callStarted) { this.canceling = true; controller.hangup(this.call.call_id); }
                 this.message = this.call ? T.retry : '';
+                // A contacts page that failed ends a search by name; it would wait for good otherwise.
+                if (this.search || this.spoken) { this.dropSearch(); this.notice = T.retry; }
                 if (this.turning) this.settle(0);
             }
             else if (value.event === 'signed_out') { this.state = 'closed'; this.qr = null; }
@@ -172,18 +176,40 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         // then ask before calling. Nothing is dialled without a yes.
         found(value) {
             if (!this.spoken && !this.search) return;
-            if (this.call || this.pendingCall) { this.spoken = ''; this.search = null; return; }
-            var search = this.search || (this.search = {name: this.spoken, best: null, pages: 0});
+            if (this.call || this.pendingCall) { this.dropSearch(); return; }
+            var self = this, search = this.search || (this.search = {name: this.spoken, best: null, pages: 0, offset: value.offset, timer: null, last: null});
             this.spoken = '';
+            // A page asked for before the search's own is not part of it.
+            if (value.offset !== search.offset) return;
+            // The helper sends a page before its names and availability are known, then again as
+            // each contact is answered: judge it once complete, or with what came after a while.
+            if (value.complete === false) {
+                search.last = value;
+                if (!search.timer) search.timer = setTimeout(function () {
+                    search.timer = null;
+                    if (self.search !== search || !search.last) return;
+                    self.judge(search, search.last); self.render();
+                }, PAGE_WAIT);
+                return;
+            }
+            clearTimeout(search.timer); search.timer = null;
+            this.judge(search, value);
+        }
+        judge(search, value) {
+            search.last = null;
             var hit = voice.match(search.name, value.users);
             if (hit && (!search.best || hit.score > search.best.score)) search.best = hit;
             var more = value.offset + layout.contacts.perPage < value.total && ++search.pages < 20;
-            if ((!search.best || search.best.score < 3) && more) { controller.send({method: 'contacts', offset: value.offset + layout.contacts.perPage}); return; }
+            if ((!search.best || search.best.score < 3) && more) { search.offset = value.offset + layout.contacts.perPage; controller.send({method: 'contacts', offset: search.offset}); return; }
             this.search = null;
             if (search.best && search.best.certain) this.confirm = search.best.contact;
             else this.notice = T.noContact + search.name;
             // Back to the first page behind the question.
             if (value.offset) controller.send({method: 'contacts', offset: 0});
+        }
+        dropSearch() {
+            if (this.search) clearTimeout(this.search.timer);
+            this.search = null; this.spoken = '';
         }
         answer() {
             var self = this, call = this.call;
@@ -792,7 +818,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (this.decor) this.decor.ghosts.forEach(function (ghost) { ghost.sprite.x = ghost.x + offset; });
         }
         halt() {
-            this.callTone.stop(); this.ringTone.stop(); this.hear(null); this.search = null; this.confirm = null; this.spoken = ''; this.pendingCall = null; this.preparation = null; this.preparing = false;
+            this.callTone.stop(); this.ringTone.stop(); this.hear(null); this.dropSearch(); this.confirm = null; this.pendingCall = null; this.preparation = null; this.preparing = false;
             this.panning(false); this.animation = null; this.dragging = null;
             if (this.turning) { clearTimeout(this.turning.timer); this.turning = null; }
             this.ticking(false); this.slide = {x: 0, velocity: 0, target: 0};

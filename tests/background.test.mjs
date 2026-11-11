@@ -155,3 +155,50 @@ test('background: a helper that needs sign-in is stopped unless the screen is th
         background.stop();
     } finally { w.done(); }
 });
+
+test('background: a helper that stops by itself is started again, less often each time; not after sign-in is needed', (t) => {
+    t.mock.timers.enable({apis: ['setTimeout', 'setInterval']});
+    const w = world({background: true, account: true});
+    try {
+        const background = loadBackground(w);
+        background.start(w.api);
+        const crash = helper => { helper.child = null; helper.emit('gone'); };
+        w.supervisors[0].emit('status', ready);
+        crash(w.supervisors[0]);
+        t.mock.timers.tick(4000); assert.equal(w.supervisors.length, 1, 'not at once');
+        t.mock.timers.tick(1000); assert.equal(w.supervisors.length, 2);
+        crash(w.supervisors[1]);
+        t.mock.timers.tick(5000); assert.equal(w.supervisors.length, 2, 'the second restart waits longer');
+        t.mock.timers.tick(25000); assert.equal(w.supervisors.length, 3);
+        // Signed in again: the wait starts over. A screen that is up owns the helper.
+        w.supervisors[2].emit('status', ready);
+        const screen = {screen: true, status() {}}; sessions.get().attach(screen);
+        crash(w.supervisors[2]);
+        t.mock.timers.tick(5000); assert.equal(w.supervisors.length, 3, 'the screen is up');
+        sessions.get().detach(screen);
+        t.mock.timers.tick(5000); assert.equal(w.supervisors.length, 4, 'started again once the screen has closed');
+        // A helper that needs sign-in is stopped on purpose, and stays stopped.
+        w.supervisors[3].emit('status', {event: 'authorization', state: 'qr', link: 'tg://login'});
+        t.mock.timers.tick(600000); assert.equal(w.supervisors.length, 4);
+        background.stop();
+    } finally { w.done(); }
+});
+
+test('background: nothing is started again with Background calls off, or after the skill is stopped', (t) => {
+    t.mock.timers.enable({apis: ['setTimeout', 'setInterval']});
+    const w = world({background: true, account: true});
+    try {
+        const background = loadBackground(w);
+        background.start(w.api);
+        w.supervisors[0].emit('status', ready);
+        sessions.get().setSetting('background', false);
+        w.supervisors[0].child = null; w.supervisors[0].emit('gone');
+        t.mock.timers.tick(600000); assert.equal(w.supervisors.length, 1);
+        sessions.get().setSetting('background', true);
+        background.start(w.api);
+        assert.equal(w.supervisors.length, 2);
+        w.supervisors[1].child = null; w.supervisors[1].emit('gone');
+        background.stop();
+        t.mock.timers.tick(600000); assert.equal(w.supervisors.length, 2);
+    } finally { w.done(); }
+});
