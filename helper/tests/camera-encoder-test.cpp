@@ -89,11 +89,12 @@ int main(int argc, char **argv) {
         check(image.RtpTimestamp() == uint32_t(3600 * (i + 1)));
         check(int(image._encodedWidth) == frames[0].width && int(image._encodedHeight) == frames[0].height);
     }
-    // The far side asks for a keyframe mid-stream: the stream goes on, and a new one is requested.
+    // The far side asks for a keyframe mid-stream: the stream goes on to the camera's next
+    // keyframe, and no new stream is asked for meanwhile.
     check(!queue.takeRestart());
     queue.push(frames[1]);
     check(encoder->Encode(picture(9000000), &key) == WEBRTC_VIDEO_CODEC_OK && out.images.size() == frames.size() + 1);
-    check(queue.takeRestart() && queue.restarts == 1);
+    check(!queue.takeRestart() && queue.restarts == 0);
 
     auto decoder = webrtc::CreateBuiltinVideoDecoderFactory()->Create(webrtc::EnvironmentFactory().Create(), webrtc::SdpVideoFormat("VP8"));
     check(bool(decoder));

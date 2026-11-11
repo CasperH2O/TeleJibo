@@ -170,14 +170,16 @@ int main(int argc, char **argv) {
         check(!queue.streaming && input.rawFrame(pixels.data()) && pixels[0] == 11 && pixels.back() == 11);
         check(!input.rawFrame(pixels.data()));
 
-        // Delta frames before a keyframe are never queued; a stalled encoder empties the queue.
+        // Delta frames before a keyframe are never queued; a stalled encoder empties the queue
+        // and waits for the camera's next keyframe, without asking for a new stream.
         jibo_media::EncodedQueue waiting; EncodedFrame delta; delta.data = Bytes(10, 1);
         waiting.push(delta); check(waiting.size() == 0);
         EncodedFrame key = delta; key.key = true; key.width = 320; key.height = 240;
         waiting.push(key); for (int i = 0; i < 29; ++i) waiting.push(delta);
         check(waiting.size() == 30 && waiting.overflows == 0);
-        waiting.push(delta); check(waiting.size() == 0 && waiting.overflows == 1 && waiting.takeRestart());
+        waiting.push(delta); check(waiting.size() == 0 && waiting.overflows == 1 && !waiting.takeRestart());
         waiting.push(delta); check(waiting.size() == 0);
+        waiting.push(key); waiting.push(delta); check(waiting.size() == 2);   // it resumes at the next keyframe
 
         // Camera back on: whatever was sent before is dropped.
         send(pipes[1], record(3, 0, webm.data(), webm.size())); input.drain(); input.poll();

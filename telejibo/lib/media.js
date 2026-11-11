@@ -206,7 +206,7 @@ class RobotMedia extends events.EventEmitter {
         if (this.outTimer !== null) { clearInterval(this.outTimer); this.outTimer = null; }
         if (enabled) { var self = this; this.out = {sent: 0, skipped: 0, frames: 0}; this.outTimer = setInterval(function () { self.outSummary(); }, 3000); }
     }
-    // The helper needs a keyframe from the camera stream.
+    // The helper asks for a new camera stream.
     restartCamera() { if (!this.closed && this.cameraSource && this.sendingVideo()) this.cameraSource.restart(); }
     fail(reason) {
         if (this.closed) return;

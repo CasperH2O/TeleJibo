@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 'use strict';
 // The call's camera. BEam 3.1.9's jibo.media.getCameraStream gives Jibo's camera as a live
-// 1280x720 VP8 WebM stream from his hardware encoder. Its bytes go to the helper as they
+// 1280x720 VP8 WebM stream from his hardware encoder (about 30 frames a second and 3 Mbit/s). Its bytes go to the helper as they
 // are (HELPER.md, fd 5, `JIWM` records) and into the call without decoding or re-encoding
 // on Jibo. If the stream cannot be had (older BEam, camera in use), decoded preview
 // photos (photo-camera.js) are used instead. Nothing is stored.
@@ -9,7 +9,7 @@
 var EventEmitter = require('events');
 
 var PIECE = 262144;            // bytes per record; the helper accepts up to 1 MiB
-var QUEUE_LIMIT = 1048576;     // about five seconds waiting in the helper's pipe: start over
+var QUEUE_LIMIT = 1048576;     // about three seconds waiting in the helper's pipe: start over
 var RESTART_GAP = 2000;        // ms between streams; each one costs the far side a short freeze
 var serial = 0;
 function queued(stream) { return typeof stream.writableLength === 'number' ? stream.writableLength : stream._writableState && stream._writableState.length || 0; }
@@ -87,7 +87,7 @@ class StreamCamera extends EventEmitter {
         this.starting.catch(function () {});
         return this.starting;
     }
-    // A new stream, for its keyframe. Streams are at least RESTART_GAP apart.
+    // A new stream, which starts with its header and a keyframe. Streams are at least RESTART_GAP apart.
     restart(reason) {
         var self = this;
         if (!this.running || this.again) return;
@@ -159,8 +159,8 @@ class CallCamera extends EventEmitter {
         if (!this.wanted) return Promise.resolve();
         return this.photo.start().catch(function (failure) { self.emit('failure', failure); });
     }
-    // The helper asked for a keyframe.
-    restart(reason) { if (this.mode === 'stream' && this.wanted) this.stream.restart(reason || 'keyframe needed'); }
+    // The helper cannot use the stream any more (a piece went missing, or no keyframe came).
+    restart(reason) { if (this.mode === 'stream' && this.wanted) this.stream.restart(reason || 'the helper asked for a new stream'); }
     stop() {
         this.wanted = false;
         return Promise.all([this.stream ? this.stream.stop() : null, this.photo.stop()]);

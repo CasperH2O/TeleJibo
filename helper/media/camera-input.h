@@ -7,6 +7,8 @@
 // All integers are little-endian. A WebM stream is the records of one serial, index 0
 // upward with none missing; a new serial is a new stream, which starts with a keyframe.
 // Its VP8 frames wait in EncodedQueue for the call's encoder, which sends them unchanged.
+// Measured on a robot (2026-11-11): 1280x720, about 29 frames a second, about 2.9 Mbit/s,
+// a keyframe every 60 frames (about two seconds).
 #pragma once
 #include "pipe-media.h"
 #include "webm-reader.h"
@@ -17,7 +19,9 @@ constexpr size_t streamHeaderBytes = 16, streamRecordLimit = 1024 * 1024;
 
 // Shared by the camera reader (one thread) and the call's video encoder (another).
 class EncodedQueue {
-    // About 1.2 s of video. Frames cannot be skipped, so a longer wait means starting over.
+    // About a second of video. Frames cannot be skipped, so when the encoder falls this far
+    // behind, what waits is dropped and sending resumes at the camera's next keyframe
+    // (the robot's encoder makes one about every two seconds).
     static constexpr size_t limit = 30;
     mutable std::mutex mutex;
     std::deque<EncodedFrame> frames;
@@ -40,7 +44,7 @@ public:
         waitingKey = false;
         if (frame.key) { width = frame.width; height = frame.height; }
         if (frames.size() >= limit) {
-            first += frames.size(); frames.clear(); waitingKey = true; ++overflows; wanted = true;
+            first += frames.size(); frames.clear(); waitingKey = true; ++overflows;
             return;
         }
         frames.push_back(std::move(frame));
@@ -58,7 +62,7 @@ public:
         out = std::move(frames.front()); frames.pop_front(); ++first; return true;
     }
     size_t size() const { std::lock_guard lock(mutex); return frames.size(); }
-    // The far side needs a keyframe, or the stream is unusable: ask the skill for a new one.
+    // The stream is unusable, or no keyframe came when one was due: ask the skill for a new one.
     void requestRestart() { std::lock_guard lock(mutex); wanted = true; }
     // True at most once per two seconds: a new stream takes a moment to arrive.
     bool takeRestart() {

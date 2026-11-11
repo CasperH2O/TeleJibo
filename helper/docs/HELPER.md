@@ -49,10 +49,13 @@ helper reads its VP8 frames (`media/webm-reader.h`) and hands them to the call
 already encoded (`CameraEncoder` in `media/platform.cpp`): nothing is decoded or
 re-encoded, and the call's own rate control cannot change them. A new serial is a
 new stream and starts with a keyframe. The hardware encoder cannot be asked for a
-keyframe, so when the far side needs one, or a piece is missing, or the encoder
-falls more than about a second behind, the helper emits
-`{"event":"camera","state":"restart"}` (at most once per two seconds) and the
-skill starts a new stream. With `--pipe-media` the robot offers VP8 only, since the
+keyframe, but it makes one about every two seconds (measured on a robot: 1280x720,
+about 29 frames a second, about 2.9 Mbit/s, a keyframe every 60 frames). When the
+far side asks for one, or the call falls more than about a second behind and the
+waiting frames are dropped, sending simply continues to the next keyframe. Only if
+a piece is missing, the stream is unreadable, or no keyframe comes within four
+seconds does the helper emit `{"event":"camera","state":"restart"}` (at most once
+per two seconds), and the skill starts a new stream. With `--pipe-media` the robot offers VP8 only, since the
 camera stream is VP8; this holds for the `JICF` fallback too.
 `JICF` frames are encoded by the stock VP8 encoder; the newest complete frame is
 used and the header lets the helper find the next whole record after a partial one.

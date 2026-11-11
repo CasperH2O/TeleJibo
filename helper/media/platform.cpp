@@ -55,6 +55,9 @@ class CameraEncoder : public webrtc::VideoEncoder {
     std::unique_ptr<webrtc::VideoEncoder> inner_;
     webrtc::EncodedImageCallback *callback_ = nullptr;
     bool wantKey_ = false, passed_ = false;
+    int64_t wantedAt_ = 0;
+    // The camera's encoder makes a keyframe about every two seconds by itself.
+    static constexpr int64_t keyframePatienceUs = 4000000;
 public:
     explicit CameraEncoder(std::unique_ptr<webrtc::VideoEncoder> inner) : inner_(std::move(inner)) {}
     void SetFecControllerOverride(webrtc::FecControllerOverride *value) override { inner_->SetFecControllerOverride(value); }
@@ -75,14 +78,18 @@ public:
             return inner_->Encode(frame, types);
         }
         passed_ = true;
-        if (types && std::find(types->begin(), types->end(), webrtc::VideoFrameType::kVideoFrameKey) != types->end()) wantKey_ = true;
+        if (types && std::find(types->begin(), types->end(), webrtc::VideoFrameType::kVideoFrameKey) != types->end() && !wantKey_) {
+            wantKey_ = true; wantedAt_ = rtc::TimeMicros();
+        }
         jibo_media::EncodedFrame next;
         if (!queue.pop(next) || !callback_) {
             if (callback_) callback_->OnDroppedFrame(webrtc::EncodedImageCallback::DropReason::kDroppedByEncoder);
             return WEBRTC_VIDEO_CODEC_OK;
         }
-        // The hardware encoder cannot be asked for a keyframe; only a new stream starts with one.
-        if (next.key) wantKey_ = false; else if (wantKey_) queue.requestRestart();
+        // The hardware encoder cannot be asked for a keyframe, but its next one is never far
+        // off: the far side waits for it. Only if none comes is a new stream asked for.
+        if (next.key) wantKey_ = false;
+        else if (wantKey_ && rtc::TimeMicros() - wantedAt_ > keyframePatienceUs) { queue.requestRestart(); wantedAt_ = rtc::TimeMicros(); }
         webrtc::EncodedImage image;
         image.SetEncodedData(webrtc::EncodedImageBuffer::Create(next.data.data(), next.data.size()));
         image._encodedWidth = uint32_t(next.width); image._encodedHeight = uint32_t(next.height);

@@ -43,8 +43,8 @@ not be shown (an alarm was going off, say) is noted on the contacts screen.
 During a call TeleJibo asks Jibo not to switch to another skill.
 
 Video goes out at Jibo's camera quality, 1280x720, straight from his hardware
-encoder without being re-encoded. It uses a fixed rate of about 1.5 Mbit/s; on
-a weak connection the picture may stutter. If the camera stream is not
+encoder without being re-encoded, at about 30 frames a second. It uses a fixed
+rate of about 3 Mbit/s; on a weak connection the picture may stutter. If the camera stream is not
 available, TeleJibo falls back to slower preview pictures.
 
 ## Privacy
