@@ -32,16 +32,38 @@ private inherited pipes, never files:
 | --- | --- | --- |
 | 3 | to helper | microphone, S16LE stereo 48 kHz, 10 ms frames |
 | 4 | from helper | decoded call audio, same format |
-| 5 | to helper | camera: `JICF`, little-endian uint32 width and height (320, 240), I420 |
+| 5 | to helper | camera, one of two record kinds (below) |
 | 6 | from helper | received video: `JIVF`, little-endian uint32 width and height, I420 |
 
+The camera pipe carries records, all integers little-endian uint32:
+
+| Record | Layout | Meaning |
+| --- | --- | --- |
+| `JIWM` | length, stream serial, piece index, then `length` bytes (at most 1 MiB) | a piece of the camera's live WebM (VP8) stream |
+| `JICF` | width, height (320, 240), then I420 | a decoded preview frame (the fallback) |
+
+A WebM stream is the records of one serial, index 0 upward with none missing. The
+helper reads its VP8 frames (`media/webm-reader.h`) and hands them to the call
+already encoded (`CameraEncoder` in `media/platform.cpp`): nothing is decoded or
+re-encoded, and the call's own rate control cannot change them. A new serial is a
+new stream and starts with a keyframe. The hardware encoder cannot be asked for a
+keyframe, so when the far side needs one, or a piece is missing, or the encoder
+falls more than about a second behind, the helper emits
+`{"event":"camera","state":"restart"}` (at most once per two seconds) and the
+skill starts a new stream. While `JIWM` records arrive the robot sends VP8 only.
+`JICF` frames are encoded by the stock VP8 encoder; the newest complete frame is
+used and the header lets the helper find the next whole record after a partial one.
+
 Calls stay refused until the app sends `{"method":"media.ready","enabled":true}`,
-which it does only after its microphone and camera have delivered data. The camera
-starts off for every call. Stale input is discarded when a call starts, queued
-microphone audio is capped at about 50 ms, and output queues are bounded and drop
-rather than block. The camera header lets the helper find the next whole frame
-after a partial one (a frame cut short when a call ended), so camera framing never
-drifts; only the newest complete frame is used.
+which it does only after its microphone has delivered audio and the camera is
+known to be there. The camera starts off for every call. Stale input is discarded
+when a call starts or the camera is switched on, queued microphone audio is capped
+at about 40 ms, and output queues are bounded and drop rather than block.
+
+`media_stats` (every five seconds during a call) reports what is received and,
+for the camera, `camera_mode` (`stream` or `frames`), `camera_sent_frames`,
+`camera_waiting_frames`, `camera_restarts`, `camera_overflows`, the stream's size
+and `camera_target_bps` (what the call would like to use; the stream is fixed).
 
 `--synthetic-media` instead enables pattern/tone capture and headless receive
 sinks for development with a consenting contact; it does not access robot

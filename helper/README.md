@@ -48,11 +48,18 @@ Neither suite needs an ARM build or a Telegram account:
 
 ```sh
 python3 tools/test-account.py    # account/call controller against synthetic TDLib updates
-python3 tools/test-media.py      # pipe framing, stale-input discard and cleanup
+python3 tools/test-media.py      # pipe framing, the camera records and live-WebM reader, cleanup
 ```
 
 They need the downloads from `fetch.py`/`fetch-media.py` and the Zig compiler from
 `tools/setup.py`.
+
+`build-media.py` also builds two ARM checks that link the call engine; run them
+under `qemu-arm -L <robot root file system>`: `video-frame-test`, and
+`camera-encoder-test <file.webm>`, which passes a real VP8 WebM file (for example
+`ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=25 -t 6 -c:v libvpx -f webm -live 1 sample.webm`)
+through the call's encoder and decodes what comes out. `data/host-tests/camera-input-test <file.webm>`
+prints what a captured camera stream holds: frames, keyframe spacing, bitrate.
 
 ## Staging and packaging
 
