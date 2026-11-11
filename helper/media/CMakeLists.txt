@@ -46,6 +46,10 @@ add_executable(video-frame-test ../tests/video-frame-test.cpp)
 target_include_directories(video-frame-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(video-frame-test PRIVATE jibo_media)
 
+add_executable(camera-encoder-test ../tests/camera-encoder-test.cpp)
+target_include_directories(camera-encoder-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(camera-encoder-test PRIVATE jibo_media)
+
 add_executable(account-test ../tests/account-test.cpp "${tg}/third-party/json11.cpp")
 target_compile_features(account-test PRIVATE cxx_std_20)
 target_include_directories(account-test PRIVATE "${tg}" "${CMAKE_CURRENT_SOURCE_DIR}")
