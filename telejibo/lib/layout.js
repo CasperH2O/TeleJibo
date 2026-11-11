@@ -79,20 +79,20 @@ var portrait = {
     video: {x: 0, y: 0, width: 405, height: 720},
     avatar: {x: 203, y: 360, size: 220, initials: 96},
     name: {x: 480, y: 135, width: 680, size: 64}, kind: {x: 480, y: 198, width: 680, size: 36},
-    emojis: {x: 480, y: 560, width: 540, size: 32}, hint: {x: 203, y: 520, width: 340, size: 30},
-    row: {x: 480, y: 290, button: 132, gap: 36, caption: 40, captionGap: 22}
+    hint: {x: 203, y: 520, width: 340, size: 30},
+    // All five controls in one row (480-1200); captions may run 20 px past their slot.
+    row: {x: 480, y: 290, button: 120, gap: 30, caption: 40, captionGap: 22, captionSpill: 20}
 };
 // Landscape streams fill a 16:9 box above a row of controls.
 var landscape = {
     video: {x: 192, y: 0, width: 896, height: 504},
-    chip: {x: 216, y: 440, height: 52, padding: 18, size: 36, maxWidth: 560}, emojis: {right: 1064, y: 440},
+    chip: {x: 216, y: 440, height: 52, padding: 18, size: 36, maxWidth: 560},
     row: {y: 540, button: 120, gap: 40}
 };
 // The own-camera picture: a 16:9 tile in a corner of the caller's video. A tap hides it.
-var selfView = {width: 208, height: 117, portrait: {x: 70, y: 520}, landscape: {x: 860, y: 64}};
+// Portrait: bottom left, 68 px in from both edges, which keeps it clear of the rounded corner.
+var selfView = {portrait: {x: 68, y: 553, width: 176, height: 99}, landscape: {x: 860, y: 64, width: 208, height: 117}};
 var callButtons = ['mute', 'camera', 'tracking', 'hangup', 'orientation'];
-// The orientation control sits apart from the portrait row, with room for its caption.
-var orientationButton = {x: 1092, y: 484, size: 96, caption: 176};
 
 var qr = {
     title: {x: 112, y: 104, width: 640, size: 80},
@@ -204,7 +204,6 @@ function video(width, height, orientation) {
 // In-call controls: one row, captions under the portrait row only.
 function rowButton(mode, index) {
     if (mode === 'portrait') {
-        if (callButtons[index] === 'orientation') return {x: orientationButton.x, y: orientationButton.y, size: orientationButton.size};
         var r = portrait.row;
         return {x: r.x + index * (r.button + r.gap), y: r.y, size: r.button};
     }
@@ -227,7 +226,7 @@ function safe(rect) {
 
 module.exports = {
     color: color, buttons: buttons, tones: tones, font: font, screen: screen, text: text, header: header, contacts: contacts,
-    message: message, incoming: incoming, portrait: portrait, landscape: landscape, callButtons: callButtons, orientationButton: orientationButton, selfView: selfView, qr: qr,
+    message: message, incoming: incoming, portrait: portrait, landscape: landscape, callButtons: callButtons, selfView: selfView, qr: qr,
     settings: settings, password: password, waiting: waiting, ACTION_BUTTON: ACTION_BUTTON,
     actionScale: actionScale, slot: slot, pages: pages, pageOf: pageOf, counter: counter, neighbours: neighbours, pager: pager,
     drag: drag, release: release, spring: spring, fit: fit, initials: initials, tone: tone, status: status, duration: duration,

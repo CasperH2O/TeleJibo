@@ -13,7 +13,7 @@ function deferred() {
 function fixture() {
     const ready = deferred(), sent = [], logs = [], tones = [];
     const log = {info() {}, debug() {}, warn(v) { logs.push(v); }, error(v) { logs.push(v); }};
-    const jibo = {face: {views: {ActionData: {CALLBACK: 'callback'}}}, sound: {
+    const jibo = {face: {views: {ActionData: {CALLBACK: 'callback'}, borderVisible: true}}, sound: {
         add(alias, options) {
             const tone = {alias, options, stopped: 0, removed: 0,
                 play(o) { this.loaded = o.loaded; }, stop() { ++this.stopped; }};
@@ -286,5 +286,20 @@ test('the self view shows in a corner during a call, a tap hides it for that cal
         assert.equal(f.screen.selfSprite, null);
         f.screen.selfFrame(canvas); assert.equal(f.screen.selfSprite, null, 'no picture without a call');
         f.screen.decor = null; f.screen.halt();
+    } finally { global.PIXI = before; }
+});
+
+test('the SDK edge border is off over a call and back on for the other screens', () => {
+    const before = global.PIXI;
+    try {
+        const f = videoFixture();
+        f.screen.videoFrame({width: 360, height: 640});
+        assert.equal(f.screen.screen, 'portrait'); assert.equal(f.jibo.face.views.borderVisible, false);
+        f.screen.videoFrame({width: 640, height: 360});
+        assert.equal(f.screen.screen, 'landscape'); assert.equal(f.jibo.face.views.borderVisible, false);
+        f.screen.event({event: 'call', call_id: 15, state: 'callStateDiscarded'});
+        assert.notEqual(f.screen.screen, 'portrait'); assert.notEqual(f.screen.screen, 'landscape');
+        assert.equal(f.jibo.face.views.borderVisible, true);
+        f.screen.disposeVideo(); f.screen.halt();
     } finally { global.PIXI = before; }
 });

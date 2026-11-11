@@ -28,7 +28,7 @@ test('every control sits inside the round-cornered safe area', () => {
     for (const id of ['decline', 'accept', 'cancel']) rects.push([id, {x: n[id].x, y: n[id].y, width: n.button, height: n.button}]);
     for (const id of ['background', 'orientation', 'signOut', 'back']) rects.push([id, {x: s[id].x, y: s[id].y, width: s.button, height: s.button}]);
     rects.push(['settings', {x: h.x, y: h.y, width: h.size, height: h.size}]);
-    for (const mode of ['portrait', 'landscape']) rects.push(['self view ' + mode, {...layout.selfView[mode], width: layout.selfView.width, height: layout.selfView.height}]);
+    for (const mode of ['portrait', 'landscape']) rects.push(['self view ' + mode, layout.selfView[mode]]);
     for (const [id, rect] of rects) assert.ok(layout.safe(rect), id + ' ' + JSON.stringify(rect));
 });
 
@@ -47,6 +47,7 @@ test('call buttons do not overlap and the full landscape row is centred', () => 
             assert.ok(a.x + a.size <= b.x || b.x + b.size <= a.x || a.y + a.size <= b.y || b.y + b.size <= a.y);
         }
         if (mode === 'landscape') assert.equal((buttons[0].x + buttons.at(-1).x + buttons.at(-1).size) / 2, 640);
+        assert.ok(buttons.every(b => b.y === buttons[0].y && b.size === buttons[0].size), mode + ': one row of equal buttons');
     }
 });
 

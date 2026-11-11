@@ -361,11 +361,9 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             var o = L.portrait;
             label('portrait', 'pName', '', o.name.x, o.name.y, o.name.size, o.name.width, {align: 'left', bold: true});
             label('portrait', 'pKind', '', o.kind.x, o.kind.y, o.kind.size, o.kind.width, {align: 'left', fill: C.muted, light: true});
-            label('portrait', 'pEmojis', '', o.emojis.x, o.emojis.y, o.emojis.size, o.emojis.width, {align: 'left'});
             label('portrait', 'pHint', '', o.hint.x, o.hint.y, o.hint.size, o.hint.width, {fill: C.caption, light: true});
             var a = L.landscape;
             label('landscape', 'lChip', '', a.chip.x + a.chip.padding, a.chip.y + a.chip.height / 2, a.chip.size, a.chip.maxWidth - 2 * a.chip.padding, {align: 'left'});
-            label('landscape', 'lEmojis', '', a.emojis.right - a.chip.padding, a.emojis.y + a.chip.height / 2, a.chip.size, 260, {align: 'right'});
             // Toggles are two stock buttons in one place (off and engaged); render shows one.
             L.callButtons.forEach(function (name, index) {
                 var spec = CALL[name];
@@ -380,15 +378,15 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                     action(mode, prefix + name, spec[1], spec[2], at.x, at.y, at.size, actions[name]);
                     if (spec[3]) action(mode, prefix + name + 'On', spec[1], spec[3], at.x, at.y, at.size, actions[name]);
                 });
-                var at = L.rowButton('portrait', index), r = o.row, own = name === 'orientation';
-                caption('portrait', name + '-text', own ? '' : T[name === 'hangup' ? 'end' : name], at.x + at.size / 2, at.y + at.size + r.captionGap + r.caption / 2,
-                    r.caption * 0.8, own ? L.orientationButton.caption : at.size + r.gap);
+                var at = L.rowButton('portrait', index), r = o.row;
+                caption('portrait', name + '-text', name === 'orientation' ? '' : T[name === 'hangup' ? 'end' : name], at.x + at.size / 2, at.y + at.size + r.captionGap + r.caption / 2,
+                    r.caption * 0.8, at.size + r.gap + r.captionSpill);
             });
 
             // The own-camera picture is painted in the video layer; these are its tap areas.
             var v = L.selfView, hide = function () { if (self.selfSprite) self.hideSelf(); };
-            area('portrait', 'selfTile', v.portrait.x, v.portrait.y, v.width, v.height, hide);
-            area('landscape', 'lSelfTile', v.landscape.x, v.landscape.y, v.width, v.height, hide);
+            area('portrait', 'selfTile', v.portrait.x, v.portrait.y, v.portrait.width, v.portrait.height, hide);
+            area('landscape', 'lSelfTile', v.landscape.x, v.landscape.y, v.landscape.width, v.landscape.height, hide);
 
             // Last, so the message stays above every screen.
             label('base', 'message', '', layout.screen.width / 2, L.message.y.other, L.message.size, L.message.width, {fill: C.muted, light: true});
@@ -462,7 +460,6 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             d.callerPortrait = sprite(group('portrait'), d.caller.texture, o.avatar.x - o.avatar.size / 2, o.avatar.y - o.avatar.size / 2, o.avatar.size, o.avatar.size);
             var landscape = group('landscape'), a = L.landscape;
             d.chip = surface(a.chip.maxWidth, a.chip.height); d.chipSprite = sprite(landscape, d.chip.texture, a.chip.x, a.chip.y);
-            d.emojiChip = surface(300, a.chip.height); d.emojiSprite = sprite(landscape, d.emojiChip.texture, a.emojis.right - 300, a.emojis.y);
             this.view.stage.addChildAt(layer, 0);
             return true;
         }
@@ -596,6 +593,9 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         render() {
             if (!this.view || typeof this.view.getComponentById !== 'function' || this.view.state === 'destroyed') return;
             var self = this, screen = this.screen = this.screenName(), decorated = this.ensureDecor();
+            // The SDK darkens the screen's edges over every view (its border); over the caller's
+            // video that reads as a smudge, so the call screens turn it off.
+            if (jibo.face && jibo.face.views && 'borderVisible' in jibo.face.views) jibo.face.views.borderVisible = screen !== 'portrait' && screen !== 'landscape';
             Object.keys(this.groups).forEach(function (group) {
                 self.groups[group].forEach(function (id) { self.show(id, group === 'base' || group === screen); });
             });
@@ -646,7 +646,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             var asking = !this.call && !this.pendingCall && this.confirm;
             var call = this.call || this.pendingCall || asking && {name: asking.name, user_id: asking.id, question: true}, self = this;
             if (!call) return;
-            var name = (call.name || '').trim(), ready = call.state === 'callStateReady', emojis = (call.emojis || []).join(' ');
+            var name = (call.name || '').trim(), ready = call.state === 'callStateReady';
             this.text('callerName', name);
             this.text('callerSub', call.question ? T.callQuestion : call.outgoing ? T.outgoing : T.incoming);
             this.text('accept-text', call.question ? T.call : T.accept); this.text('decline-text', call.question ? T.cancel : T.decline);
@@ -658,11 +658,10 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 });
                 this.show('cancel', !!call.outgoing); this.show('cancel-text', !!call.outgoing);
             }
-            this.text('pName', name); this.text('pKind', T.videoCall + ' · ' + this.elapsed()); this.text('pEmojis', emojis);
+            this.text('pName', name); this.text('pKind', T.videoCall + ' · ' + this.elapsed());
             this.text('pHint', this.mediaState === 'established' ? T.cameraOff : T.connecting);
             if (screen === 'portrait') this.show('pHint', !this.videoSprite);
-            this.text('lChip', this.chipText()); this.text('lEmojis', emojis);
-            if (screen === 'landscape') this.show('lEmojis', !!emojis);
+            this.text('lChip', this.chipText());
             this.text('mute-text', microphoneEnabled ? (this.muted ? T.unmute : T.mute) : T.micOff);
             var engaged = {mute: this.muted, camera: this.camera, tracking: this.tracking}, orientation = this.setting('orientation');
             this.text('orientation-text', T.orientation[orientation]);
@@ -693,8 +692,8 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             d.panel.visible = screen === 'portrait';
             d.video.visible = screen === 'portrait' || screen === 'landscape';
             if (this.selfSprite && d.video.visible) {
-                var tile = layout.selfView, at = tile[screen];
-                this.selfSprite.position.set(at.x, at.y); this.selfSprite.width = tile.width; this.selfSprite.height = tile.height;
+                var at = layout.selfView[screen];
+                this.selfSprite.position.set(at.x, at.y); this.selfSprite.width = at.width; this.selfSprite.height = at.height;
                 // Above the caller's picture, whichever was created first.
                 d.video.addChild(this.selfSprite);
             }
@@ -729,12 +728,9 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         }
         // Landscape chips follow their text width.
         paintChips() {
-            var d = this.decor, a = layout.landscape, emojis = (this.call && this.call.emojis || []).join(' ');
+            var d = this.decor, a = layout.landscape;
             var chip = this.component('lChip'), size = chip && this.measure(chip, chip.text || '');
             if (size) this.art.paintChip(d.chip, size.width + 2 * a.chip.padding, false);
-            var emoji = this.component('lEmojis'), width = emojis && emoji && this.measure(emoji, emoji.text || '');
-            d.emojiSprite.visible = !!width;
-            if (width) this.art.paintChip(d.emojiChip, width.width + 2 * a.chip.padding, true);
         }
         elapsed() { return this.callStarted ? layout.duration(Date.now() - this.callStarted) : T.connecting; }
         chipText() { var name = this.call && (this.call.name || '').trim() || ''; return this.callStarted ? name + ' · ' + this.elapsed() : name; }
