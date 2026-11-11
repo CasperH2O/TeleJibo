@@ -5,7 +5,7 @@
 // live in layout.js. No DOM/chat UI, photo downloads, payload logs or media persistence.
 var path = require('path');
 var layout = require('./layout'), createArt = require('./art'), createLog = require('./log'), CallTone = require('./call-tone');
-var settings = require('./settings');
+var settings = require('./settings'), voice = require('./voice');
 var C = layout.color, T = layout.text, B = layout.buttons;
 
 var STOCK_ICON = function (name) { return 'core://resources/actionIcons/' + name + '.png'; };
@@ -38,6 +38,9 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             // An incoming call rings until it is answered, declined or gone.
             this.ringTone = new CallTone(jibo, this.diagnostics, {src: 'jibo-anim-db-animations://audio/device/ds_double_pulse_01.m4a', volume: 0.7});
             this.missed = null;
+            // Voice: the name asked for at launch, the search for it, and the contact awaiting a yes.
+            this.spoken = ''; this.search = null; this.confirm = null; this.notice = '';
+            this.listener = new voice.Listener(jibo, this.diagnostics); this.listening = null;
             this.avatars = new Map(); this.serial = 0; this.art = null; this.decor = null;
             this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = '';
             this.selfSprite = null; this.selfTexture = null; this.selfCanvas = null;
@@ -53,9 +56,11 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         }
         // Taps are ignored while the contact pages move.
         moving() { return !!(this.dragging || this.animation || this.turning); }
-        open() {
+        // result: what opened the skill. "Hey Jibo, video call Anna" carries the name.
+        open(result) {
             if (this.view) return;
             this.closing = null; this.state = 'starting'; this.message = '';
+            this.spoken = voice.callee(result && result.asr && result.asr.text); this.search = null; this.confirm = null; this.notice = '';
             var self = this, views = jibo.face.views;
             if (!views || !views.createView || !views.changeView || !global.PIXI) { this.exit({noElementsOfSurprise: true}); return; }
             this.view = views.createView('View', this.config(views));
@@ -95,7 +100,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         }
         dial(contact) {
             if (!contact || !contact.available || this.call || this.pendingCall || this.outgoingRequest || this.closing) return;
-            this.message = ''; this.canceling = false; this.missed = null;
+            this.message = ''; this.canceling = false; this.missed = null; this.notice = ''; this.confirm = null;
             var self = this, pending = this.pendingCall = {user_id: contact.id, name: contact.name, outgoing: true};
             this.disposeVideo();
             return this.prepareCall(pending, function () {
@@ -106,6 +111,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             });
         }
         cancelCall() {
+            if (this.confirm && !this.call && !this.pendingCall) { this.confirm = null; this.render(); return; }
             this.canceling = true; this.callTone.stop();
             if (this.pendingCall || this.preparing) { this.pendingCall = null; this.releasePreparation(); }
             if (this.call) controller.hangup(this.call.call_id);
@@ -118,7 +124,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (value.event === 'authorization') {
                 this.state = value.state; this.qr = value.state === 'qr' ? value.link : null; this.password = '';
                 if (value.state === 'ready') controller.send({method: 'contacts', offset: 0});
-            } else if (value.event === 'contacts') this.turned(value);
+            } else if (value.event === 'contacts') { this.turned(value); this.found(value); }
             else if (value.event === 'avatar') { this.avatar(value.user_id, value.jpeg); return; }
             else if (value.event === 'media') this.mediaState = value.state;
             else if (value.event === 'call') {
@@ -161,6 +167,45 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             }
             else if (value.event === 'signed_out') { this.state = 'closed'; this.qr = null; }
             this.render();
+        }
+        // The person asked for someone by name: look through the contact pages for the best fit,
+        // then ask before calling. Nothing is dialled without a yes.
+        found(value) {
+            if (!this.spoken && !this.search) return;
+            if (this.call || this.pendingCall) { this.spoken = ''; this.search = null; return; }
+            var search = this.search || (this.search = {name: this.spoken, best: null, pages: 0});
+            this.spoken = '';
+            var hit = voice.match(search.name, value.users);
+            if (hit && (!search.best || hit.score > search.best.score)) search.best = hit;
+            var more = value.offset + layout.contacts.perPage < value.total && ++search.pages < 20;
+            if ((!search.best || search.best.score < 3) && more) { controller.send({method: 'contacts', offset: value.offset + layout.contacts.perPage}); return; }
+            this.search = null;
+            if (search.best && search.best.certain) this.confirm = search.best.contact;
+            else this.notice = T.noContact + search.name;
+            // Back to the first page behind the question.
+            if (value.offset) controller.send({method: 'contacts', offset: 0});
+        }
+        answer() {
+            var self = this, call = this.call;
+            if (this.confirm && !call && !this.pendingCall) { var contact = this.confirm; this.confirm = null; this.dial(contact); return; }
+            if (call && !call.outgoing && call.state === 'callStatePending' && !this.preparing) this.prepareCall(call, function () {
+                if (self.call && self.call.call_id === call.call_id) controller.send({method: 'call.accept', call_id: call.call_id});
+                else controller.releaseMedia();
+            });
+        }
+        // Listen for a spoken yes or no while a question is on screen, and only then.
+        hear(mode) {
+            var self = this;
+            if (mode === this.listening) return;
+            this.listening = mode; this.listener.stop();
+            if (!mode) return;
+            this.listener.start(function (text) {
+                var said = voice.decision(text);
+                if (!said || self.listening !== mode || !self.active()) return false;
+                self.diagnostics.info('voice: heard', said, 'for', mode);
+                if (said === 'yes') self.answer(); else self.cancelCall();
+                return true;
+            }, mode === 'ring' ? {turns: 8} : {turns: 2});
         }
         // Head tracking on or off for this call; if Jibo cannot start it the button falls back and says so.
         look(wanted, why) {
@@ -284,13 +329,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             label('incoming', 'callerName', '', n.name.x, n.name.y, n.name.size, n.name.width, {bold: true});
             label('incoming', 'callerSub', '', n.sub.x, n.sub.y, n.sub.size, n.sub.width, {fill: C.muted, light: true});
             [['decline', n.decline, B.decline, 'cancel', T.decline, hangup],
-             ['accept', n.accept, B.accept, 'ok', T.accept, function () {
-                 var call = self.call;
-                 if (call) self.prepareCall(call, function () {
-                     if (self.call && self.call.call_id === call.call_id) controller.send({method: 'call.accept', call_id: call.call_id});
-                     else controller.releaseMedia();
-                 });
-             }],
+             ['accept', n.accept, B.accept, 'ok', T.accept, function () { self.answer(); }],
              ['cancel', n.cancel, B.decline, 'cancel', T.cancel, hangup]].forEach(function (item) {
                 var at = item[1];
                 action('incoming', item[0], STOCK_ICON(item[3]), item[2], at.x, at.y, n.button, item[5]);
@@ -491,6 +530,8 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         screenName() {
             if (this.leaving || this.closing || this.state === 'closing') return 'waiting';
             if (this.pendingCall) return 'incoming';
+            if (this.confirm && !this.call) return 'incoming';
+            if ((this.search || this.spoken) && !this.call && this.state === 'ready') return 'waiting';
             if (this.call) return this.call.state !== 'callStateReady' ? 'incoming' : (this.videoMode || this.setting('orientation')) === 'landscape' ? 'landscape' : 'portrait';
             return {ready: 'contacts', settings: 'settings', qr: 'signin', password: 'password'}[this.state] || 'waiting';
         }
@@ -535,13 +576,13 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (screen !== 'contacts' && (this.dragging || this.animation)) { this.dragging = null; this.animation = null; this.slide = {x: 0, velocity: 0, target: 0}; }
             this.panning(screen === 'contacts');
             // On the contacts screen the line under the pager tells of a call that rang unseen.
-            var note = screen === 'contacts' ? (this.missed ? T.missedFrom + (this.missed.name || '').trim() : '') : this.message;
+            var note = screen === 'contacts' ? (this.missed ? T.missedFrom + (this.missed.name || '').trim() : this.notice) : this.message;
             this.text('message', note);
             this.show('message', !!note);
             var message = this.component('message');
             if (message && message.display) message.display.y = layout.message.y[screen] || layout.message.y.other;
             var closing = this.leaving || this.closing || this.state === 'closing';
-            this.text('waiting', closing ? T.closing : this.state === 'closed' ? T.signedOut : this.state === 'stopped' ? T.stopped :
+            this.text('waiting', closing ? T.closing : this.search ? T.lookingFor + this.search.name + '…' : this.state === 'closed' ? T.signedOut : this.state === 'stopped' ? T.stopped :
                 this.state === 'setup' ? T.setupMissing : T.title);
             var loading = screen === 'waiting' && (closing || ['closed', 'stopped', 'setup'].indexOf(this.state) < 0);
             this.show('loading', loading);
@@ -560,6 +601,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (dialing && !this.canceling && !closing) this.callTone.start(); else this.callTone.stop();
             var ringing = this.call && !this.call.outgoing && this.call.state === 'callStatePending' && !this.preparing;
             if (ringing && !this.canceling && !closing) this.ringTone.start(); else this.ringTone.stop();
+            this.hear(closing || this.canceling ? null : ringing ? 'ring' : screen === 'incoming' && this.confirm && !this.call && !this.pendingCall ? 'confirm' : null);
         }
         renderContacts(screen) {
             var page = this.page, c = layout.contacts;
@@ -573,11 +615,13 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             }
         }
         renderCall(screen) {
-            var call = this.call || this.pendingCall, self = this;
+            var asking = !this.call && !this.pendingCall && this.confirm;
+            var call = this.call || this.pendingCall || asking && {name: asking.name, user_id: asking.id, question: true}, self = this;
             if (!call) return;
             var name = (call.name || '').trim(), ready = call.state === 'callStateReady', emojis = (call.emojis || []).join(' ');
             this.text('callerName', name);
-            this.text('callerSub', call.outgoing ? T.outgoing : T.incoming);
+            this.text('callerSub', call.question ? T.callQuestion : call.outgoing ? T.outgoing : T.incoming);
+            this.text('accept-text', call.question ? T.call : T.accept); this.text('decline-text', call.question ? T.cancel : T.decline);
             if (screen === 'incoming') {
                 this.show('callerSub', !this.message);
                 ['accept', 'decline'].forEach(function (id) {
@@ -641,7 +685,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (screen === 'signin' && this.qr) {
                 if (d.qr.key !== this.qr) { var code = qrFactory(0, 'M'); code.addData(this.qr); code.make(); this.art.paintQr(d.qr, this.qr, code); }
             } else if (d.qr.key) this.art.wipe(d.qr);
-            var caller = this.call || this.pendingCall;
+            var caller = this.call || this.pendingCall || this.confirm && {user_id: this.confirm.id, name: this.confirm.name};
             if (caller) {
                 this.paintFace(d.caller, caller.user_id, caller.name || '', layout.incoming.avatar.initials);
                 d.callerPortrait.visible = !this.videoSprite;
@@ -748,7 +792,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (this.decor) this.decor.ghosts.forEach(function (ghost) { ghost.sprite.x = ghost.x + offset; });
         }
         halt() {
-            this.callTone.stop(); this.ringTone.stop(); this.pendingCall = null; this.preparation = null; this.preparing = false;
+            this.callTone.stop(); this.ringTone.stop(); this.hear(null); this.search = null; this.confirm = null; this.spoken = ''; this.pendingCall = null; this.preparation = null; this.preparing = false;
             this.panning(false); this.animation = null; this.dragging = null;
             if (this.turning) { clearTimeout(this.turning.timer); this.turning = null; }
             this.ticking(false); this.slide = {x: 0, velocity: 0, target: 0};

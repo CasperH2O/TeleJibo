@@ -27,7 +27,7 @@ var screen = {width: 1280, height: 720, margin: 52, corner: 54, minText: 30};
 var text = {
     title: 'TeleJibo', connecting: 'Connecting…', closing: 'Closing…', signedOut: 'Signed out',
     videoCall: 'Video call', noCalls: 'No calls', online: 'Online', missed: 'Missed call', missedFrom: 'Missed call from ',
-    incoming: 'Incoming video call', outgoing: 'Calling…', decline: 'Decline', accept: 'Answer', cancel: 'Cancel',
+    incoming: 'Incoming video call', outgoing: 'Calling…', callQuestion: 'Video call?', call: 'Call', lookingFor: 'Looking for ', noContact: 'No contact called ', decline: 'Decline', accept: 'Answer', cancel: 'Cancel',
     mute: 'Mute', unmute: 'Unmute', micOff: 'Mic off', camera: 'Camera', tracking: 'Look at me', end: 'End', cameraOff: 'Camera off',
     trackingUnavailable: 'Head tracking is unavailable',
     linkTitle: 'Link Telegram', steps: ['Open Telegram on your phone', 'Settings, Devices, Link Desktop Device', 'Scan the code'],
