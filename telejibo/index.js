@@ -65,8 +65,9 @@ function prepareMedia() {
     if (media) return releaseMedia().then(prepareMedia);
     var supervisor = helper();
     if (!supervisor || !supervisor.child) { log.error('media: no helper is running, so there is nothing to attach the devices to'); return Promise.reject(Error('media_unavailable')); }
-    var current = media = new RobotMedia(jibo, {log: skill && skill.log, captureMicrophone: controller.microphoneEnabled});
+    var current = media = new RobotMedia(jibo, {log: skill && skill.log, captureMicrophone: controller.microphoneEnabled, selfView: controller.settings.selfView});
     current.on('video', function (canvas) { if (skill) skill.videoFrame(canvas); });
+    current.on('self', function (canvas) { if (skill && skill.selfFrame) skill.selfFrame(canvas); });
     current.on('unavailable', function () {
         if (media !== current) return;
         releaseMedia();
@@ -134,6 +135,7 @@ var controller = {
     setSetting: function (name, value) {
         if (session) controller.settings = session.setSetting(name, value);
         else { var next = Object.assign({}, controller.settings); next[name] = value; controller.settings = settings.clean(next); }
+        if (name === 'selfView' && media && media.setSelfView) media.setSelfView(controller.settings.selfView);
     },
     send: function (value) { return !!session && session.send(value); },
     // Camera frames stop with the tap, not when Telegram confirms the call ended.

@@ -33,7 +33,7 @@ var text = {
     linkTitle: 'Link Telegram', steps: ['Open Telegram on your phone', 'Settings, Devices, Link Desktop Device', 'Scan the code'],
     waitingScan: 'Waiting for scan…',
     settings: 'Settings', signOut: 'Sign out', back: 'Back',
-    backgroundOn: 'Background calls on', backgroundOff: 'Background calls off',
+    backgroundOn: 'Background: on', backgroundOff: 'Background: off', selfViewOn: 'Self view: on', selfViewOff: 'Self view: off',
     // The call layout: follow the incoming video, or always one shape.
     orientation: {auto: 'Automatic', landscape: 'Landscape', portrait: 'Portrait'}, video: 'Video: ',
     passwordTitle: 'Two-step password', passwordHint: 'Password', shift: 'Shift', symbols: '#?!', remove: 'Delete', submit: 'Sign in',
@@ -85,6 +85,8 @@ var landscape = {
     chip: {x: 216, y: 440, height: 52, padding: 18, size: 36, maxWidth: 560}, emojis: {right: 1064, y: 440},
     row: {y: 540, button: 120, gap: 40}
 };
+// The own-camera picture: a 16:9 tile in a corner of the caller's video. A tap hides it.
+var selfView = {width: 208, height: 117, portrait: {x: 70, y: 520}, landscape: {x: 860, y: 64}};
 var callButtons = ['mute', 'camera', 'tracking', 'hangup', 'orientation'];
 // The orientation control sits apart from the portrait row, with room for its caption.
 var orientationButton = {x: 1092, y: 484, size: 96, caption: 176};
@@ -98,7 +100,7 @@ var qr = {
 };
 // Two rows of two: the choices above, sign out and back below. Captions sit `gap` under their button.
 var settings = {title: {x: 640, y: 68, size: 60}, button: 150,
-    background: {x: 405, y: 128}, orientation: {x: 725, y: 128}, signOut: {x: 405, y: 388}, back: {x: 725, y: 388},
+    background: {x: 245, y: 128}, orientation: {x: 565, y: 128}, selfView: {x: 885, y: 128}, signOut: {x: 405, y: 388}, back: {x: 725, y: 388},
     caption: {gap: 40, size: 36, width: 310}};
 var password = {
     title: {x: 112, y: 61, size: 54}, field: {x: 112, y: 120, width: 1056, height: 80, size: 36},
@@ -221,7 +223,7 @@ function safe(rect) {
 
 module.exports = {
     color: color, buttons: buttons, tones: tones, font: font, screen: screen, text: text, header: header, contacts: contacts,
-    message: message, incoming: incoming, portrait: portrait, landscape: landscape, callButtons: callButtons, orientationButton: orientationButton, qr: qr,
+    message: message, incoming: incoming, portrait: portrait, landscape: landscape, callButtons: callButtons, orientationButton: orientationButton, selfView: selfView, qr: qr,
     settings: settings, password: password, waiting: waiting, ACTION_BUTTON: ACTION_BUTTON,
     actionScale: actionScale, slot: slot, pages: pages, pageOf: pageOf, counter: counter, neighbours: neighbours, pager: pager,
     drag: drag, release: release, spring: spring, fit: fit, initials: initials, tone: tone, status: status, duration: duration,

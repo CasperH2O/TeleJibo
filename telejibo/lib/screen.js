@@ -40,6 +40,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.missed = null;
             this.avatars = new Map(); this.serial = 0; this.art = null; this.decor = null;
             this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = '';
+            this.selfSprite = null; this.selfTexture = null; this.selfCanvas = null;
             // Contacts paging: strip offset in px, the finger's drag, the spring and a requested page.
             this.slide = {x: 0, velocity: 0, target: 0}; this.dragging = null; this.animation = null; this.turning = null; this.pan = null;
         }
@@ -233,6 +234,10 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                     s.orientation.x, s.orientation.y, s.button, function () { self.cycleOrientation(); });
             });
             caption('settings', 'videoMode-text', '', s.orientation.x + s.button / 2, captionY(s.orientation), s.caption.size, s.caption.width);
+            var toggleSelf = function () { self.choose('selfView', !self.setting('selfView')); };
+            action('settings', 'selfView', OWN_ICON('video'), B.neutral, s.selfView.x, s.selfView.y, s.button, toggleSelf);
+            action('settings', 'selfViewOn', OWN_ICON('video'), B.accent, s.selfView.x, s.selfView.y, s.button, toggleSelf);
+            caption('settings', 'selfView-text', T.selfViewOn, s.selfView.x + s.button / 2, captionY(s.selfView), s.caption.size, s.caption.width);
             action('settings', 'signOut', STOCK_ICON('shutdown'), B.decline, s.signOut.x, s.signOut.y, s.button,
                 function () { controller.send({method: 'logout'}); self.password = ''; self.qr = null; });
             caption('settings', 'signOut-text', T.signOut, s.signOut.x + s.button / 2, captionY(s.signOut), s.caption.size, s.caption.width);
@@ -318,6 +323,11 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 caption('portrait', name + '-text', own ? '' : T[name === 'hangup' ? 'end' : name], at.x + at.size / 2, at.y + at.size + r.captionGap + r.caption / 2,
                     r.caption * 0.8, own ? L.orientationButton.caption : at.size + r.gap);
             });
+
+            // The own-camera picture is painted in the video layer; these are its tap areas.
+            var v = L.selfView, hide = function () { if (self.selfSprite) self.choose('selfView', false); };
+            area('portrait', 'selfTile', v.portrait.x, v.portrait.y, v.width, v.height, hide);
+            area('landscape', 'lSelfTile', v.landscape.x, v.landscape.y, v.width, v.height, hide);
 
             // Last, so the message stays above every screen.
             label('base', 'message', '', layout.screen.width / 2, L.message.y.other, L.message.size, L.message.width, {fill: C.muted, light: true});
@@ -417,6 +427,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (this.leaving || this.closing) return;
             if (typeof controller.setSetting === 'function') controller.setSetting(name, value);
             if (name === 'orientation' && this.videoCanvas) { this.videoSize = ''; this.videoFrame(this.videoCanvas); }
+            if (name === 'selfView' && !value) this.disposeSelf();
             this.render();
         }
         // Automatic, then landscape, then portrait.
@@ -451,9 +462,31 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             // The call layout follows the picture's shape, or the person's fixed choice.
             if (created || previous !== this.videoMode) this.render();
         }
+        // The own-camera picture (media.js `self`): a canvas while the camera sends, null when it stops.
+        selfFrame(canvas) {
+            var PIXI = global.PIXI;
+            if (!canvas || !this.view || !PIXI || !this.decor || !this.call || this.call.state !== 'callStateReady' || this.leaving || this.closing) {
+                if (!canvas || !this.call) this.disposeSelf();
+                return;
+            }
+            if (this.selfCanvas !== canvas) this.disposeSelf();
+            var created = !this.selfSprite;
+            if (created) {
+                this.selfCanvas = canvas; this.selfTexture = PIXI.Texture.fromCanvas(canvas);
+                this.selfSprite = new PIXI.Sprite(this.selfTexture);
+                this.decor.video.addChild(this.selfSprite);
+            }
+            this.selfTexture.baseTexture.update();
+            if (created) this.render();
+        }
+        disposeSelf() {
+            if (this.selfSprite) { this.selfSprite.destroy(); this.selfTexture.destroy(true); }
+            this.selfSprite = null; this.selfTexture = null; this.selfCanvas = null;
+        }
         disposeVideo() {
             if (this.videoSprite) { this.videoSprite.destroy(); if (this.videoCrop) this.videoCrop.destroy(false); this.videoTexture.destroy(true); }
             this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = '';
+            this.disposeSelf();
         }
         screenName() {
             if (this.leaving || this.closing || this.state === 'closing') return 'waiting';
@@ -581,12 +614,21 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.text('background-text', background ? T.backgroundOn : T.backgroundOff);
             settings.ORIENTATIONS.forEach(function (mode) { self.show('videoMode' + capital(mode), mode === orientation); });
             this.text('videoMode-text', T.video + T.orientation[orientation].toLowerCase());
+            var selfView = !!this.setting('selfView');
+            this.show('selfView', !selfView); this.show('selfViewOn', selfView);
+            this.text('selfView-text', selfView ? T.selfViewOn : T.selfViewOff);
         }
         renderDecor(screen) {
             var d = this.decor, page = this.page;
             Object.keys(d.screens).forEach(function (name) { d.screens[name].visible = name === screen; });
             d.panel.visible = screen === 'portrait';
             d.video.visible = screen === 'portrait' || screen === 'landscape';
+            if (this.selfSprite && d.video.visible) {
+                var tile = layout.selfView, at = tile[screen];
+                this.selfSprite.position.set(at.x, at.y); this.selfSprite.width = tile.width; this.selfSprite.height = tile.height;
+                // Above the caller's picture, whichever was created first.
+                d.video.addChild(this.selfSprite);
+            }
             if (screen === 'contacts') {
                 var around = layout.neighbours(page.offset, page.total), bar = layout.pager(page.offset, page.total);
                 d.ghosts.forEach(function (ghost) { ghost.sprite.visible = ghost.index < (ghost.side < 0 ? around.previous : around.next); });

@@ -57,6 +57,7 @@ class StreamCamera extends EventEmitter {
                     for (var at = 0; at < bytes.length; at += PIECE) self.destination.write(record(id, index++, bytes.slice(at, at + PIECE)));
                 } catch (error) { fail(error); return; }
                 self.stats.bytes += bytes.length;
+                self.emit('data', bytes, id);
                 if (first) { first = false; clearTimeout(self.deadline); self.deadline = null; resolve(); }
             }
             function open() {
@@ -122,6 +123,8 @@ class CallCamera extends EventEmitter {
             this.stream = new StreamCamera(jibo, {destination: this.options.destination, log: this.log, timeoutMs: this.options.streamTimeoutMs,
                 stallMs: this.options.stallMs, restartGap: this.options.restartGap, queueLimit: this.options.queueLimit});
             this.stream.on('failure', function (error) { self.fallBack(error); });
+            // The same bytes, for the self-view.
+            this.stream.on('data', function (bytes, id) { self.emit('stream', bytes, id); });
             this.mode = 'stream';
         }
     }

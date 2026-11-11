@@ -26,8 +26,9 @@ test('every control sits inside the round-cornered safe area', () => {
     }
     const n = layout.incoming, s = layout.settings, h = layout.header.settings;
     for (const id of ['decline', 'accept', 'cancel']) rects.push([id, {x: n[id].x, y: n[id].y, width: n.button, height: n.button}]);
-    for (const id of ['background', 'orientation', 'signOut', 'back']) rects.push([id, {x: s[id].x, y: s[id].y, width: s.button, height: s.button}]);
+    for (const id of ['background', 'orientation', 'selfView', 'signOut', 'back']) rects.push([id, {x: s[id].x, y: s[id].y, width: s.button, height: s.button}]);
     rects.push(['settings', {x: h.x, y: h.y, width: h.size, height: h.size}]);
+    for (const mode of ['portrait', 'landscape']) rects.push(['self view ' + mode, {...layout.selfView[mode], width: layout.selfView.width, height: layout.selfView.height}]);
     for (const [id, rect] of rects) assert.ok(layout.safe(rect), id + ' ' + JSON.stringify(rect));
 });
 

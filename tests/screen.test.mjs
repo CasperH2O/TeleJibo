@@ -248,15 +248,37 @@ test('settings show the saved choices and change them', () => {
     f.screen.state = 'settings'; f.screen.render();
     assert.equal(f.screen.screen, 'settings');
     assert.equal(visible('background'), true); assert.equal(visible('backgroundOn'), false);
-    assert.equal(f.components.get('background-text').text, 'Background calls off');
+    assert.equal(f.components.get('background-text').text, 'Background: off');
     assert.equal(visible('videoModeAuto'), true); assert.equal(visible('videoModeLandscape'), false);
     assert.equal(f.components.get('videoMode-text').text, 'Video: automatic');
     f.screen.choose('background', !f.screen.setting('background'));
     assert.equal(f.controller.settings.background, true);
     assert.equal(visible('background'), false); assert.equal(visible('backgroundOn'), true);
-    assert.equal(f.components.get('background-text').text, 'Background calls on');
+    assert.equal(f.components.get('background-text').text, 'Background: on');
     f.screen.cycleOrientation();
     assert.equal(visible('videoModeLandscape'), true); assert.equal(visible('videoModeAuto'), false);
     assert.equal(f.components.get('videoMode-text').text, 'Video: landscape');
     assert.deepEqual(f.saved, [['background', true], ['orientation', 'landscape']]);
+});
+
+test('the self view shows in a corner during a call, a tap hides it and saves that, and it goes with the call', () => {
+    const before = global.PIXI;
+    try {
+        const f = videoFixture(), added = [];
+        f.screen.decor = {slots: [], video: {addChild(sprite) { added.push(sprite); }}};
+        const canvas = {width: 208, height: 117};
+        f.screen.selfFrame(canvas);
+        assert.ok(f.screen.selfSprite); assert.equal(added.length, 1);
+        f.screen.selfFrame(canvas); assert.equal(added.length, 1, 'one sprite, updated in place');
+        f.screen.choose('selfView', false);
+        assert.equal(f.screen.selfSprite, null);
+        assert.deepEqual(f.saved, [['selfView', false]]);
+        f.screen.selfFrame(canvas); assert.ok(f.screen.selfSprite);
+        f.screen.selfFrame(null); assert.equal(f.screen.selfSprite, null);
+        f.screen.selfFrame(canvas);
+        f.screen.event({event: 'call', call_id: 15, state: 'callStateDiscarded'});
+        assert.equal(f.screen.selfSprite, null);
+        f.screen.selfFrame(canvas); assert.equal(f.screen.selfSprite, null, 'no picture without a call');
+        f.screen.decor = null; f.screen.halt();
+    } finally { global.PIXI = before; }
 });

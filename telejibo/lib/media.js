@@ -4,7 +4,7 @@
 // and the camera (its live stream, or preview photos decoded to I420). Media flows over the helper's
 // private pipes (fd 3 microphone in, 4 audio out, 5 camera in, 6 video out; HELPER.md).
 var events = require('events'), childProcess = require('child_process');
-var createLog = require('./log'), PhotoCamera = require('./photo-camera'), PageMicrophone = require('./microphone'), CallCamera = require('./camera');
+var createLog = require('./log'), PhotoCamera = require('./photo-camera'), PageMicrophone = require('./microphone'), CallCamera = require('./camera'), SelfView = require('./self-view');
 var CAMERA_FRAME = 12 + 320 * 240 * 3 / 2;
 // Why a device fails is only knowable from these lines (the screen shows one message for
 // every cause), so each stage of opening the devices says what it is doing and how long it took.
@@ -56,6 +56,7 @@ class RobotMedia extends events.EventEmitter {
         this.callActive = false; this.cameraReady = false; this.cameraEnabled = false;
         this.began = 0; this.stopping = null;
         this.out = {sent: 0, skipped: 0, frames: 0}; this.outTimer = null;
+        this.selfView = null; this.selfWanted = this.options.selfView === true;
     }
     // While the camera is on for a call, say every 3 s how many frames went to the helper: no
     // line at all means the camera was never switched on, zero sent means no decoded frame arrived or
@@ -127,6 +128,7 @@ class RobotMedia extends events.EventEmitter {
         this.cameraSource = new CallCamera(this.jibo, {destination: helper.stdio[5], log: this.log, stream: this.options.cameraStream,
             photo: new Photo(this.jibo, {spawn: spawn, log: this.log, timeoutMs: limit})});
         this.cameraSource.on('failure', function (error) { if (!self.closed) self.fail('camera: ' + why(error)); });
+        this.cameraSource.on('stream', function (bytes, id) { if (self.selfView && self.sendingVideo()) self.selfView.stream(bytes, id); });
         this.cameraSource.on('frame', function (bytes) {
             if (self.closed) return;
             if (self.jibo.privacyController && self.jibo.privacyController.enabled) { self.fail('privacy_enabled'); return; }
@@ -136,6 +138,7 @@ class RobotMedia extends events.EventEmitter {
                 if (queued(stream) < CAMERA_FRAME) { stream.write(cameraFrame(bytes,320,240)); self.out.sent++; }
                 else self.out.skipped++;
             }
+            if (self.selfView && self.sendingVideo()) self.selfView.frame(bytes, 320, 240, fromI420);
             self.cameraReady = true;
         });
         // One device at a time: a successful request is not a decoded frame.
@@ -165,15 +168,29 @@ class RobotMedia extends events.EventEmitter {
         }).catch(function (error) { return self.stop().then(function () { throw error; }); });
     }
     sendingVideo() { return this.callActive && this.cameraEnabled; }
+    // The small own-camera picture: on only while the camera is sending and the person wants it.
+    setSelfView(wanted) { this.selfWanted = !!wanted; this.syncSelfView(); }
+    syncSelfView() {
+        var self = this, on = this.selfWanted && !this.closed && this.sendingVideo();
+        if (on && !this.selfView) {
+            var host = this.options.page || (typeof window !== 'undefined' ? window : null);
+            if (!host || !host.document) return;
+            this.selfView = new SelfView(host, function (canvas) { if (!self.closed) self.emit('self', canvas); });
+        } else if (!on && this.selfView) {
+            this.selfView.stop(); this.selfView = null; this.emit('self', null);
+        }
+    }
     setCallActive(active) {
         if (active !== this.callActive) this.log.info('call ' + (active ? (this.options.captureMicrophone === false ? 'active: microphone capture disabled' : 'active: the microphone now goes to the call') : 'no longer active') + ' (' + this.since() + ')');
         this.callActive = active; if (!active) this.setCamera(false);
+        this.syncSelfView();
     }
     setCamera(enabled) {
         enabled = !!enabled;
         if (enabled && this.jibo.privacyController && this.jibo.privacyController.enabled) { this.fail('privacy_enabled'); return; }
         if (enabled !== this.cameraEnabled) this.log.info('camera ' + (enabled ? 'ON for the call' + (this.callActive ? '' : ' (but the call is not active yet, so nothing is sent)') : 'off'));
         this.cameraEnabled = enabled;
+        this.syncSelfView();
         if (this.cameraSource) {
             var current = this;
             // Cancel an in-flight startup at once on camera-off. The queued work
@@ -204,6 +221,7 @@ class RobotMedia extends events.EventEmitter {
         var abort = this.abortStart; this.abortStart = null;
         if (abort) abort(reason || Error('media_closed'));
         if (this.outTimer !== null) clearInterval(this.outTimer); this.outTimer = null;
+        if (this.selfView) { this.selfView.stop(); this.selfView = null; }
         (this.listeners || []).splice(0).forEach(function (l) { l[0].removeListener(l[1], l[2]); });
         var children = this.children.splice(0);
         var cameraStop = this.cameraSource ? this.cameraSource.stop() : Promise.resolve();
