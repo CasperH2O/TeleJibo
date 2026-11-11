@@ -7,9 +7,9 @@ var path = require('path');
 var jibo = require('jibo'), BeSkill = require('@be/be-framework').BeSkill;
 var Supervisor = require('./lib/helper'), RobotMedia = require('./lib/media'), credentials = require('./lib/credentials');
 var paths = require('./lib/paths'), layout = require('./lib/layout'), createScreen = require('./lib/screen');
-var createLog = require('./lib/log'), log = createLog();
+var createLog = require('./lib/log'), log = createLog(), settings = require('./lib/settings');
 
-var appRoot = __dirname;
+var appRoot = __dirname, dataRoot = null;
 var supervisor = null, skill = null, media = null, mediaStarting = null, mediaReleasing = null, tracking = null, closePromise = null;
 var unhook = [];
 
@@ -112,6 +112,15 @@ var controller = {
     // Temporary video-test build while platform microphone access is investigated.
     microphoneEnabled: false,
     mediaReady: false,
+    // The person's choices (lib/settings.js); defaults until the data folder has been read.
+    settings: settings.clean(),
+    setSetting: function (name, value) {
+        var next = Object.assign({}, controller.settings); next[name] = value;
+        controller.settings = settings.clean(next);
+        try { if (dataRoot) settings.write(dataRoot, controller.settings); }
+        catch (error) { log.error('settings: could not be saved:', error && (error.code || error.message)); }
+        log.info('settings:', name, '->', controller.settings[name]);
+    },
     send: function (value) { return !!supervisor && supervisor.send(value); },
     // Camera frames stop with the tap, not when Telegram confirms the call ended.
     hangup: function (callId) {
@@ -128,9 +137,10 @@ var controller = {
         skill = screen;
         log = createLog(screen.log);
         log.info('opened');
-        var dataRoot, apiFile;
+        var apiFile;
         try {
             dataRoot = paths.ensureDirectory(paths.dataRoot());
+            controller.settings = settings.read(dataRoot);
             apiFile = credentials.apiFile(appRoot, dataRoot);
         } catch (error) { apiFile = null; log.error('sign-in setup unavailable:', error && (error.code || error.message)); }
         if (!apiFile) { screen.state = 'setup'; screen.render(); return; }

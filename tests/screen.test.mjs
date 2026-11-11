@@ -21,7 +21,9 @@ function fixture() {
         },
         remove(alias) { ++tones.find(t => t.alias === alias).removed; }
     }};
-    const controller = {microphoneEnabled: false, releases: 0,
+    const saved = [];
+    const controller = {microphoneEnabled: false, releases: 0, settings: {background: false, orientation: 'auto', selfView: true, diagnostics: false},
+        setSetting(name, value) { saved.push([name, value]); this.settings = {...this.settings, [name]: value}; },
         prepareMedia: () => ready.promise,
         releaseMedia() { ++this.releases; return Promise.resolve(); },
         send(v) { sent.push(v); return true; },
@@ -35,7 +37,7 @@ function fixture() {
     screen.view = {getComponentById: id => components.get(id)};
     screen.ensureDecor = () => false; screen.panning = () => {}; screen.ticking = () => {};
     screen.state = 'ready'; screen.page = {users: [{id: 1, name: 'Alex', available: true}], offset: 0, total: 12};
-    return {screen, controller, ready, sent, tones, logs, components, jibo};
+    return {screen, controller, ready, sent, tones, logs, components, jibo, saved};
 }
 const contact = {id: 1, name: 'Alex', available: true};
 
@@ -182,22 +184,28 @@ function videoFixture() {
     return {...f, textures};
 }
 
-test('remote upright frames pick the layout; Rotate corrects all four directions without touching call media', () => {
+test('upright frames pick the layout in Automatic; the orientation button cycles and saves a fixed layout without touching call media', () => {
     const before = global.PIXI;
     try {
         const f = videoFixture(), canvas = {width: 360, height: 480};
+        const shown = () => ['Auto', 'Landscape', 'Portrait'].filter(m => f.components.get((f.screen.screen === 'landscape' ? 'l' : '') + 'orientation' + m).display.visible);
         assert.equal(f.screen.screen, 'portrait');
-        assert.equal(f.components.get('rotate').display.visible, false);
+        assert.deepEqual(shown(), ['Auto']);
         f.screen.videoFrame(canvas);
         assert.equal(f.screen.screen, 'portrait');
-        assert.equal(f.components.get('rotate').display.visible, true);
         const sent = [...f.sent];
-        for (let i = 1; i <= 4; ++i) {
-            f.screen.rotateVideo();
-            assert.equal(f.screen.videoTurns, i % 4);
-            assert.equal(f.screen.screen, i % 2 ? 'landscape' : 'portrait');
-            assert.equal(f.screen.videoSprite.rotation, (i % 4) * Math.PI / 2);
-        }
+        f.screen.cycleOrientation();
+        assert.equal(f.controller.settings.orientation, 'landscape');
+        assert.equal(f.screen.screen, 'landscape'); assert.deepEqual(shown(), ['Landscape']);
+        // The whole portrait picture, inside the landscape box.
+        assert.equal(f.screen.videoSprite.height, 504); assert.equal(f.screen.videoSprite.width, 378);
+        f.screen.cycleOrientation();
+        assert.equal(f.controller.settings.orientation, 'portrait');
+        assert.equal(f.screen.screen, 'portrait'); assert.deepEqual(shown(), ['Portrait']);
+        assert.equal(f.components.get('orientation-text').text, 'Portrait');
+        f.screen.cycleOrientation();
+        assert.equal(f.controller.settings.orientation, 'auto');
+        assert.deepEqual(f.saved, [['orientation', 'landscape'], ['orientation', 'portrait'], ['orientation', 'auto']]);
         assert.deepEqual(f.sent, sent);
         assert.equal(f.controller.releases, 0);
         f.screen.event({event: 'call', call_id: 15, state: 'callStateDiscarded'});
@@ -207,29 +215,48 @@ test('remote upright frames pick the layout; Rotate corrects all four directions
     } finally { global.PIXI = before; }
 });
 
-test('manual rotation survives frame resizing and canvas replacement, resets on a new call, and ignores late frames', () => {
+test('a fixed orientation holds across frame sizes, canvases and calls, and late frames are ignored', () => {
     const before = global.PIXI;
     try {
         const f = videoFixture(), canvas = {width: 640, height: 480};
-        f.screen.videoFrame(canvas); f.screen.rotateVideo();
+        f.screen.videoFrame(canvas);
+        assert.equal(f.screen.screen, 'landscape');
+        f.screen.cycleOrientation(); f.screen.cycleOrientation();
         assert.equal(f.screen.screen, 'portrait');
         canvas.width = 480; canvas.height = 360; f.screen.videoFrame(canvas);
         f.screen.videoFrame({width: 320, height: 240});
-        assert.equal(f.screen.videoTurns, 1);
         assert.equal(f.screen.screen, 'portrait');
         const image = f.screen.videoCanvas, crop = f.screen.videoCrop;
-        f.screen.cancelCall(); f.screen.rotateVideo(); f.screen.videoFrame(canvas);
-        assert.equal(f.screen.videoTurns, 1); assert.equal(f.screen.videoCanvas, image);
-        assert.equal(f.screen.videoCrop, crop);
+        f.screen.cancelCall(); f.screen.videoFrame(canvas);
+        assert.equal(f.screen.videoCanvas, image); assert.equal(f.screen.videoCrop, crop);
         f.screen.event({event: 'call', call_id: 15, state: 'callStateDiscarded'});
         f.screen.videoFrame(canvas); assert.equal(f.screen.videoSprite, null);
         f.screen.event({event: 'call', call_id: 16, state: 'callStateReady'});
-        assert.equal(f.screen.videoTurns, 0);
         assert.equal(f.screen.screen, 'portrait');
-        f.screen.videoFrame(canvas); assert.equal(f.screen.screen, 'landscape');
+        f.screen.videoFrame(canvas); assert.equal(f.screen.screen, 'portrait');
+        f.screen.cycleOrientation();
+        assert.equal(f.screen.screen, 'landscape');
         f.screen.leaving = true; const count = f.textures.length;
-        f.screen.videoFrame({width: 360, height: 480}); f.screen.rotateVideo();
-        assert.equal(f.screen.videoTurns, 0); assert.equal(f.textures.length, count);
+        f.screen.videoFrame({width: 360, height: 480}); f.screen.cycleOrientation();
+        assert.equal(f.controller.settings.orientation, 'auto'); assert.equal(f.textures.length, count);
         f.screen.disposeVideo(); f.screen.halt();
     } finally { global.PIXI = before; }
+});
+
+test('settings show the saved choices and change them', () => {
+    const f = fixture(), visible = id => f.components.get(id).display.visible;
+    f.screen.state = 'settings'; f.screen.render();
+    assert.equal(f.screen.screen, 'settings');
+    assert.equal(visible('background'), true); assert.equal(visible('backgroundOn'), false);
+    assert.equal(f.components.get('background-text').text, 'Background calls off');
+    assert.equal(visible('videoModeAuto'), true); assert.equal(visible('videoModeLandscape'), false);
+    assert.equal(f.components.get('videoMode-text').text, 'Video: automatic');
+    f.screen.choose('background', !f.screen.setting('background'));
+    assert.equal(f.controller.settings.background, true);
+    assert.equal(visible('background'), false); assert.equal(visible('backgroundOn'), true);
+    assert.equal(f.components.get('background-text').text, 'Background calls on');
+    f.screen.cycleOrientation();
+    assert.equal(visible('videoModeLandscape'), true); assert.equal(visible('videoModeAuto'), false);
+    assert.equal(f.components.get('videoMode-text').text, 'Video: landscape');
+    assert.deepEqual(f.saved, [['background', true], ['orientation', 'landscape']]);
 });

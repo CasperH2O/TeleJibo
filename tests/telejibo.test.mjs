@@ -26,7 +26,7 @@ test('every control sits inside the round-cornered safe area', () => {
     }
     const n = layout.incoming, s = layout.settings, h = layout.header.settings;
     for (const id of ['decline', 'accept', 'cancel']) rects.push([id, {x: n[id].x, y: n[id].y, width: n.button, height: n.button}]);
-    for (const id of ['signOut', 'back']) rects.push([id, {x: s[id].x, y: s[id].y, width: s.button, height: s.button}]);
+    for (const id of ['background', 'orientation', 'signOut', 'back']) rects.push([id, {x: s[id].x, y: s[id].y, width: s.button, height: s.button}]);
     rects.push(['settings', {x: h.x, y: h.y, width: h.size, height: h.size}]);
     for (const [id, rect] of rects) assert.ok(layout.safe(rect), id + ' ' + JSON.stringify(rect));
 });
@@ -62,12 +62,36 @@ test('pager follows the stock track and hides for one page', () => {
 });
 
 test('video is cropped, never stretched, into its box', () => {
-    const portrait = layout.video(480, 640), landscape = layout.video(640, 480);
+    const portrait = layout.video(480, 640), landscape = layout.video(640, 480, 'auto');
     assert.equal(portrait.mode, 'portrait');
     assert.equal(landscape.mode, 'landscape');
-    for (const v of [portrait, landscape]) {
+    for (const v of [portrait, landscape, layout.video(640, 480, 'landscape'), layout.video(480, 640, 'portrait')]) {
         assert.ok(Math.abs(v.crop.width / v.crop.height - v.rect.width / v.rect.height) < 0.02);
     }
+});
+
+test('a fixed orientation shows the whole of a differently shaped picture inside its box', () => {
+    for (const [w, h, mode] of [[480, 640, 'landscape'], [1280, 720, 'portrait'], [360, 640, 'landscape']]) {
+        const v = layout.video(w, h, mode), box = layout[mode].video;
+        assert.equal(v.mode, mode);
+        assert.deepEqual(v.crop, {x: 0, y: 0, width: w, height: h});
+        assert.ok(Math.abs(v.rect.width / v.rect.height - w / h) < 0.02);
+        assert.ok(v.rect.x >= box.x && v.rect.y >= box.y && v.rect.x + v.rect.width <= box.x + box.width && v.rect.y + v.rect.height <= box.y + box.height);
+        assert.ok(v.rect.width === box.width || v.rect.height === box.height);
+    }
+});
+
+test('settings keep known choices, ignore the rest, and survive a damaged file', () => {
+    const settings = require('../telejibo/lib/settings.js'), dir = temp();
+    assert.deepEqual(settings.read(dir), settings.DEFAULTS);
+    assert.deepEqual(settings.write(dir, {background: true, orientation: 'portrait', extra: 1, selfView: 'yes'}),
+        {background: true, orientation: 'portrait', selfView: true, diagnostics: false});
+    assert.deepEqual(fs.readdirSync(dir), ['settings.json']);
+    assert.equal(settings.read(dir).background, true);
+    fs.writeFileSync(settings.file(dir), '{"orientation":"sideways","background":"x"');
+    assert.deepEqual(settings.read(dir), settings.DEFAULTS);
+    assert.deepEqual(['auto', 'landscape', 'portrait'].map(settings.nextOrientation), ['landscape', 'portrait', 'auto']);
+    fs.rmSync(dir, {recursive: true});
 });
 
 test('paging helpers', () => {

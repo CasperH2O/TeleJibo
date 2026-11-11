@@ -28,11 +28,14 @@ var text = {
     title: 'TeleJibo', connecting: 'Connecting…', closing: 'Closing…', signedOut: 'Signed out',
     videoCall: 'Video call', noCalls: 'No calls', online: 'Online', missed: 'Missed call',
     incoming: 'Incoming video call', outgoing: 'Calling…', decline: 'Decline', accept: 'Answer', cancel: 'Cancel',
-    mute: 'Mute', unmute: 'Unmute', micOff: 'Mic off', camera: 'Camera', tracking: 'Look at me', rotate: 'Rotate', end: 'End', cameraOff: 'Camera off',
+    mute: 'Mute', unmute: 'Unmute', micOff: 'Mic off', camera: 'Camera', tracking: 'Look at me', end: 'End', cameraOff: 'Camera off',
     trackingUnavailable: 'Head tracking is unavailable',
     linkTitle: 'Link Telegram', steps: ['Open Telegram on your phone', 'Settings, Devices, Link Desktop Device', 'Scan the code'],
     waitingScan: 'Waiting for scan…',
     settings: 'Settings', signOut: 'Sign out', back: 'Back',
+    backgroundOn: 'Background calls on', backgroundOff: 'Background calls off',
+    // The call layout: follow the incoming video, or always one shape.
+    orientation: {auto: 'Automatic', landscape: 'Landscape', portrait: 'Portrait'}, video: 'Video: ',
     passwordTitle: 'Two-step password', passwordHint: 'Password', shift: 'Shift', symbols: '#?!', remove: 'Delete', submit: 'Sign in',
     setupMissing: 'TeleJibo is missing its sign-in setup', retry: 'Please try again', mediaStarting: 'Starting camera and microphone…', videoStarting: 'Starting camera…',
     mediaUnavailable: 'Call media unavailable', mediaStopped: 'Call media stopped', stopped: 'Connection stopped'
@@ -82,7 +85,9 @@ var landscape = {
     chip: {x: 216, y: 440, height: 52, padding: 18, size: 36, maxWidth: 560}, emojis: {right: 1064, y: 440},
     row: {y: 540, button: 120, gap: 40}
 };
-var callButtons = ['mute', 'camera', 'tracking', 'hangup', 'rotate'];
+var callButtons = ['mute', 'camera', 'tracking', 'hangup', 'orientation'];
+// The orientation control sits apart from the portrait row, with room for its caption.
+var orientationButton = {x: 1092, y: 484, size: 96, caption: 176};
 
 var qr = {
     title: {x: 112, y: 104, width: 640, size: 80},
@@ -91,7 +96,10 @@ var qr = {
     plate: {x: 808, y: 170, size: 352, radius: 20, padding: 24},
     waiting: {x: 112, y: 612, size: 36}
 };
-var settings = {title: {x: 640, y: 68, size: 60}, button: 150, signOut: {x: 405, y: 250}, back: {x: 725, y: 250}, caption: {y: 440, size: 40, width: 260}};
+// Two rows of two: the choices above, sign out and back below. Captions sit `gap` under their button.
+var settings = {title: {x: 640, y: 68, size: 60}, button: 150,
+    background: {x: 405, y: 128}, orientation: {x: 725, y: 128}, signOut: {x: 405, y: 388}, back: {x: 725, y: 388},
+    caption: {gap: 40, size: 36, width: 310}};
 var password = {
     title: {x: 112, y: 61, size: 54}, field: {x: 112, y: 120, width: 1056, height: 80, size: 36},
     keys: {x: 115, y: 216, width: 96, height: 68, gap: 10, size: 34},
@@ -169,23 +177,28 @@ function duration(milliseconds) {
     var two = function (n) { return (n < 10 ? '0' : '') + n; };
     return (hours ? hours + ':' : '') + two(Math.floor(seconds / 60) % 60) + ':' + two(seconds % 60);
 }
-// The helper supplies upright frames. Optional clockwise quarter-turns correct a
-// peer's missing/wrong metadata locally. Choose the layout after that correction,
-// and express the centred crop in the original texture's coordinates.
-function video(width, height, turns) {
-    turns = turns || 0;
-    var sideways = turns % 2 !== 0, w = sideways ? height : width, h = sideways ? width : height;
-    var mode = h > w ? 'portrait' : 'landscape', box = (mode === 'portrait' ? portrait : landscape).video;
-    var scale = Math.max(box.width / w, box.height / h);
-    var cropWidth = Math.min(w, Math.round(box.width / scale)), cropHeight = Math.min(h, Math.round(box.height / scale));
-    if (sideways) { var swap = cropWidth; cropWidth = cropHeight; cropHeight = swap; }
-    return {mode: mode, rotation: turns * Math.PI / 2, rect: {x: box.x, y: box.y, width: box.width, height: box.height},
-        crop: {x: Math.floor((width - cropWidth) / 2), y: Math.floor((height - cropHeight) / 2), width: cropWidth, height: cropHeight}};
+// The helper supplies upright frames. `orientation` is the person's choice: 'auto' takes the
+// layout from the picture's shape and fills its box (centred crop, never stretched); a forced
+// layout fills the box the same way when the shapes agree and otherwise shows the whole
+// picture inside it, with bars.
+function video(width, height, orientation) {
+    var shape = height > width ? 'portrait' : 'landscape';
+    var mode = orientation === 'landscape' || orientation === 'portrait' ? orientation : shape;
+    var box = (mode === 'portrait' ? portrait : landscape).video;
+    if (mode === shape) {
+        var scale = Math.max(box.width / width, box.height / height);
+        var cropWidth = Math.min(width, Math.round(box.width / scale)), cropHeight = Math.min(height, Math.round(box.height / scale));
+        return {mode: mode, rect: {x: box.x, y: box.y, width: box.width, height: box.height},
+            crop: {x: Math.floor((width - cropWidth) / 2), y: Math.floor((height - cropHeight) / 2), width: cropWidth, height: cropHeight}};
+    }
+    var fit = Math.min(box.width / width, box.height / height), w = Math.round(width * fit), h = Math.round(height * fit);
+    return {mode: mode, rect: {x: box.x + Math.round((box.width - w) / 2), y: box.y + Math.round((box.height - h) / 2), width: w, height: h},
+        crop: {x: 0, y: 0, width: width, height: height}};
 }
 // In-call controls: one row, captions under the portrait row only.
 function rowButton(mode, index) {
     if (mode === 'portrait') {
-        if (callButtons[index] === 'rotate') return {x: 1092, y: 484, size: 96};
+        if (callButtons[index] === 'orientation') return {x: orientationButton.x, y: orientationButton.y, size: orientationButton.size};
         var r = portrait.row;
         return {x: r.x + index * (r.button + r.gap), y: r.y, size: r.button};
     }
@@ -208,7 +221,7 @@ function safe(rect) {
 
 module.exports = {
     color: color, buttons: buttons, tones: tones, font: font, screen: screen, text: text, header: header, contacts: contacts,
-    message: message, incoming: incoming, portrait: portrait, landscape: landscape, callButtons: callButtons, qr: qr,
+    message: message, incoming: incoming, portrait: portrait, landscape: landscape, callButtons: callButtons, orientationButton: orientationButton, qr: qr,
     settings: settings, password: password, waiting: waiting, ACTION_BUTTON: ACTION_BUTTON,
     actionScale: actionScale, slot: slot, pages: pages, pageOf: pageOf, counter: counter, neighbours: neighbours, pager: pager,
     drag: drag, release: release, spring: spring, fit: fit, initials: initials, tone: tone, status: status, duration: duration,

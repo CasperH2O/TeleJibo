@@ -7,7 +7,9 @@ toward the lower right (jibo-ui-classic tokens, iconography.style). Writes:
   icon.png                              330x330 store and main-menu glyph (BEacon tints the tile)
   telejibo/resources/icons/video.png    265x265 action-button icon (camera toggle)
   telejibo/resources/icons/settings.png 265x265 action-button icon (settings)
-  telejibo/resources/icons/rotate.png   265x265 action-button icon (rotate video)
+  telejibo/resources/icons/rotate.png   265x265 action-button icon (video orientation: automatic)
+  telejibo/resources/icons/landscape.png, portrait.png  265x265 (video orientation: fixed)
+  telejibo/resources/icons/bell.png     265x265 action-button icon (background calls)
 
 PNGs are 8-bit RGBA with only IHDR/IDAT/IEND chunks, and deterministic: the same bytes on
 every run. Shapes are 24-unit outlines (Feather-like proportions), supersampled 4x4.
@@ -87,6 +89,26 @@ def rotate_arrow():
         dx, dy = px - 12, py - 12
         return 6.2 <= math.hypot(dx, dy) <= 8.8 and not (dx > 0 and dy < -2)
     return [(arc, WHITE), (convex([(15, 3), (22, 3), (22, 10)]), WHITE)]
+
+
+def outline(x, y, width, height, radius, stroke):
+    outer = rounded_rect(x, y, width, height, radius)
+    inner = rounded_rect(x + stroke, y + stroke, width - 2 * stroke, height - 2 * stroke, max(0.1, radius - stroke))
+    return lambda px, py: outer(px, py) and not inner(px, py)
+
+
+# A screen in one shape, with the picture's horizon line inside.
+def frame(wide):
+    if wide:
+        return [(outline(2, 5.5, 20, 13, 2.4, 2.2), WHITE), (rounded_rect(7, 11, 10, 2, 1), WHITE)]
+    return [(outline(5.5, 2, 13, 20, 2.4, 2.2), WHITE), (rounded_rect(9, 11, 6, 2, 1), WHITE)]
+
+
+def bell():
+    return [(disc(12, 9.6, 5.6), WHITE),
+            (convex([(6.4, 9.6), (17.6, 9.6), (19.6, 17.2), (4.4, 17.2)]), WHITE),
+            (rounded_rect(3.2, 16.2, 17.6, 2.4, 1.2), WHITE),
+            (disc(12, 20.4, 1.9), WHITE)]
 
 
 def raster(width, height, glyph, scale, origin):
@@ -199,6 +221,9 @@ def main():
         write('telejibo/resources/icons/settings.png', 265, 265, icon(265, 265, cog(), 128, (132, 132), 60))
     if wanted('rotate'):
         write('telejibo/resources/icons/rotate.png', 265, 265, icon(265, 265, rotate_arrow(), 138, (132.5, 132.5), 58))
+    for name, glyph_of in (('landscape', lambda: frame(True)), ('portrait', lambda: frame(False)), ('bell', bell)):
+        if wanted(name):
+            write('telejibo/resources/icons/%s.png' % name, 265, 265, icon(265, 265, glyph_of(), 138, (132.5, 132.5), 58))
 
 
 if __name__ == '__main__':

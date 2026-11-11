@@ -5,6 +5,7 @@
 // live in layout.js. No DOM/chat UI, photo downloads, payload logs or media persistence.
 var path = require('path');
 var layout = require('./layout'), createArt = require('./art'), createLog = require('./log'), CallTone = require('./call-tone');
+var settings = require('./settings');
 var C = layout.color, T = layout.text, B = layout.buttons;
 
 var STOCK_ICON = function (name) { return 'core://resources/actionIcons/' + name + '.png'; };
@@ -14,9 +15,11 @@ var CALL = {
     mute: ['mute', STOCK_ICON('mic'), B.neutral, B.engaged],
     camera: ['camera', OWN_ICON('video'), B.neutral, B.accent],
     tracking: ['tracking', STOCK_ICON('face'), B.neutral, B.accent],
-    rotate: ['rotate', OWN_ICON('rotate'), B.neutral, null],
     hangup: ['hangup', STOCK_ICON('cancel'), B.decline, null]
 };
+// One button per video orientation, in one place; render shows the current one.
+var ORIENTATION_ICON = {auto: OWN_ICON('rotate'), landscape: OWN_ICON('landscape'), portrait: OWN_ICON('portrait')};
+function capital(value) { return value.charAt(0).toUpperCase() + value.slice(1); }
 
 module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
     var microphoneEnabled = controller.microphoneEnabled !== false;
@@ -33,7 +36,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.pendingCall = null; this.preparation = null; this.canceling = false; this.outgoingRequest = false;
             this.callTone = new CallTone(jibo, this.diagnostics);
             this.avatars = new Map(); this.serial = 0; this.art = null; this.decor = null;
-            this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = ''; this.videoTurns = 0;
+            this.videoSprite = null; this.videoTexture = null; this.videoCrop = null; this.videoCanvas = null; this.videoMode = null; this.videoSize = '';
             // Contacts paging: strip offset in px, the finger's drag, the spring and a requested page.
             this.slide = {x: 0, velocity: 0, target: 0}; this.dragging = null; this.animation = null; this.turning = null; this.pan = null;
         }
@@ -126,7 +129,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 // Each call starts with the configured microphone state and, once it is up, the
                 // camera on too; the person can switch it off. A new call never shows the previous
                 // call's last video frame.
-                if (!this.call || this.call.call_id !== value.call_id) { this.muted = !microphoneEnabled; this.camera = false; this.mediaState = 'connecting'; this.message = ''; this.callStarted = 0; this.videoTurns = 0; this.disposeVideo(); }
+                if (!this.call || this.call.call_id !== value.call_id) { this.muted = !microphoneEnabled; this.camera = false; this.mediaState = 'connecting'; this.message = ''; this.callStarted = 0; this.disposeVideo(); }
                 // Head tracking, like the camera, is per call.
                 this.call = value;
                 if (value.state === 'callStateReady' && !this.callStarted) {
@@ -140,7 +143,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 if (['callStateDiscarded', 'callStateError'].indexOf(value.state) >= 0) {
                     if (this.preparing) this.releasePreparation();
                     this.canceling = false;
-                    this.call = null; this.callStarted = 0; this.videoTurns = 0; this.disposeVideo();
+                    this.call = null; this.callStarted = 0; this.disposeVideo();
                     if (this.tracking) { this.tracking = false; controller.setTracking(false); }
                 }
             } else if (value.event === 'error') {
@@ -199,7 +202,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 mute: function () { if (!microphoneEnabled) return; self.muted = !self.muted; self.diagnostics.info('call: mute button -> microphone', self.muted ? 'muted' : 'on'); controller.send({method: 'call.mute', enabled: self.muted}); self.render(); },
                 camera: function () { self.camera = !self.camera; controller.setCamera(self.camera); self.render(); },
                 tracking: function () { self.look(!self.tracking, 'button'); },
-                rotate: function () { self.rotateVideo(); },
+                orientation: function () { self.cycleOrientation(); },
                 hangup: hangup
             };
 
@@ -216,13 +219,22 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 self.sliding.push({id: 'contact' + index, x: slot.x}, {id: 'contact' + index + '-text', x: centre});
             }
 
-            var s = L.settings;
+            var s = L.settings, captionY = function (at) { return at.y + s.button + s.caption.gap; };
             label('settings', 'settingsTitle', T.settings, s.title.x, s.title.y, s.title.size, 600);
+            var toggleBackground = function () { self.choose('background', !self.setting('background')); };
+            action('settings', 'background', OWN_ICON('bell'), B.neutral, s.background.x, s.background.y, s.button, toggleBackground);
+            action('settings', 'backgroundOn', OWN_ICON('bell'), B.accent, s.background.x, s.background.y, s.button, toggleBackground);
+            caption('settings', 'background-text', T.backgroundOff, s.background.x + s.button / 2, captionY(s.background), s.caption.size, s.caption.width);
+            settings.ORIENTATIONS.forEach(function (mode) {
+                action('settings', 'videoMode' + capital(mode), ORIENTATION_ICON[mode], mode === 'auto' ? B.accent : B.neutral,
+                    s.orientation.x, s.orientation.y, s.button, function () { self.cycleOrientation(); });
+            });
+            caption('settings', 'videoMode-text', '', s.orientation.x + s.button / 2, captionY(s.orientation), s.caption.size, s.caption.width);
             action('settings', 'signOut', STOCK_ICON('shutdown'), B.decline, s.signOut.x, s.signOut.y, s.button,
                 function () { controller.send({method: 'logout'}); self.password = ''; self.qr = null; });
-            caption('settings', 'signOut-text', T.signOut, s.signOut.x + s.button / 2, s.caption.y, s.caption.size, s.caption.width);
+            caption('settings', 'signOut-text', T.signOut, s.signOut.x + s.button / 2, captionY(s.signOut), s.caption.size, s.caption.width);
             action('settings', 'back', STOCK_ICON('back'), B.neutral, s.back.x, s.back.y, s.button, function () { self.state = 'ready'; self.render(); });
-            caption('settings', 'back-text', T.back, s.back.x + s.button / 2, s.caption.y, s.caption.size, s.caption.width);
+            caption('settings', 'back-text', T.back, s.back.x + s.button / 2, captionY(s.back), s.caption.size, s.caption.width);
 
             var q = L.qr;
             label('signin', 'qrTitle', T.linkTitle, q.title.x, q.title.y, q.title.size, q.title.width, {align: 'left', bold: true});
@@ -290,12 +302,18 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                 var spec = CALL[name];
                 ['portrait', 'landscape'].forEach(function (mode) {
                     var at = L.rowButton(mode, index), prefix = mode === 'portrait' ? '' : 'l';
+                    if (name === 'orientation') {
+                        settings.ORIENTATIONS.forEach(function (choice) {
+                            action(mode, prefix + name + capital(choice), ORIENTATION_ICON[choice], choice === 'auto' ? B.accent : B.neutral, at.x, at.y, at.size, actions[name]);
+                        });
+                        return;
+                    }
                     action(mode, prefix + name, spec[1], spec[2], at.x, at.y, at.size, actions[name]);
                     if (spec[3]) action(mode, prefix + name + 'On', spec[1], spec[3], at.x, at.y, at.size, actions[name]);
                 });
-                var at = L.rowButton('portrait', index), r = o.row;
-                caption('portrait', name + '-text', T[name === 'hangup' ? 'end' : name], at.x + at.size / 2, at.y + at.size + r.captionGap + r.caption / 2,
-                    r.caption * 0.8, at.size + r.gap);
+                var at = L.rowButton('portrait', index), r = o.row, own = name === 'orientation';
+                caption('portrait', name + '-text', own ? '' : T[name === 'hangup' ? 'end' : name], at.x + at.size / 2, at.y + at.size + r.captionGap + r.caption / 2,
+                    r.caption * 0.8, own ? L.orientationButton.caption : at.size + r.gap);
             });
 
             // Last, so the message stays above every screen.
@@ -390,11 +408,16 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             var photo = this.avatars.get(id);
             this.art.paintAvatar(surface, id + ':' + (photo ? 'photo' + photo.serial : name), photo && photo.image, layout.tone(id), layout.initials(name), initialsSize);
         }
-        rotateVideo() {
-            if (!this.call || this.call.state !== 'callStateReady' || !this.videoCanvas || this.canceling || this.leaving || this.closing) return;
-            this.videoTurns = (this.videoTurns + 1) % 4;
-            this.videoFrame(this.videoCanvas);
+        setting(name) { return (controller.settings || settings.DEFAULTS)[name]; }
+        // A choice takes effect at once and is saved for the next time.
+        choose(name, value) {
+            if (this.leaving || this.closing) return;
+            if (typeof controller.setSetting === 'function') controller.setSetting(name, value);
+            if (name === 'orientation' && this.videoCanvas) { this.videoSize = ''; this.videoFrame(this.videoCanvas); }
+            this.render();
         }
+        // Automatic, then landscape, then portrait.
+        cycleOrientation() { this.choose('orientation', settings.nextOrientation(this.setting('orientation'))); }
         videoFrame(canvas) {
             if (!this.view || !global.PIXI || !this.call || this.call.state !== 'callStateReady' || this.canceling || this.leaving || this.closing) return;
             var PIXI = global.PIXI;
@@ -411,22 +434,18 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             base.update();
             // Crop (never stretch) to the layout's box. A texture with its own
             // frame keeps it across updates; PIXI 4.6 resets a full one's frame.
-            var size = base.width + 'x' + base.height + ':' + this.videoTurns, previous = this.videoMode;
+            var orientation = this.setting('orientation'), size = base.width + 'x' + base.height + ':' + orientation, previous = this.videoMode;
             if (size !== this.videoSize) {
-                var fit = layout.video(base.width, base.height, this.videoTurns), crop = fit.crop, old = this.videoCrop;
+                var fit = layout.video(base.width, base.height, orientation), crop = fit.crop, old = this.videoCrop;
                 this.videoCrop = new PIXI.Texture(base, new PIXI.Rectangle(crop.x, crop.y, crop.width, crop.height));
                 this.videoSprite.texture = this.videoCrop;
                 if (old) old.destroy(false);
-                this.videoSprite.anchor.set(0.5);
-                this.videoSprite.position.set(fit.rect.x + fit.rect.width / 2, fit.rect.y + fit.rect.height / 2);
-                this.videoSprite.rotation = fit.rotation;
-                var sideways = this.videoTurns % 2 !== 0;
-                this.videoSprite.width = sideways ? fit.rect.height : fit.rect.width;
-                this.videoSprite.height = sideways ? fit.rect.width : fit.rect.height;
+                this.videoSprite.position.set(fit.rect.x, fit.rect.y);
+                this.videoSprite.width = fit.rect.width; this.videoSprite.height = fit.rect.height;
                 this.videoSize = size; this.videoMode = fit.mode;
             }
             this.videoSprite.visible = true;
-            // Use the upright/corrected image's shape for the call layout.
+            // The call layout follows the picture's shape, or the person's fixed choice.
             if (created || previous !== this.videoMode) this.render();
         }
         disposeVideo() {
@@ -436,7 +455,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
         screenName() {
             if (this.leaving || this.closing || this.state === 'closing') return 'waiting';
             if (this.pendingCall) return 'incoming';
-            if (this.call) return this.call.state !== 'callStateReady' ? 'incoming' : this.videoMode === 'landscape' ? 'landscape' : 'portrait';
+            if (this.call) return this.call.state !== 'callStateReady' ? 'incoming' : (this.videoMode || this.setting('orientation')) === 'landscape' ? 'landscape' : 'portrait';
             return {ready: 'contacts', settings: 'settings', qr: 'signin', password: 'password'}[this.state] || 'waiting';
         }
         // Only changed text: each assignment refits the label's font, which is costly.
@@ -495,6 +514,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.fill('password', this.password ? C.text : C.caption);
             for (var k = 0; k < 40; ++k) this.text('key' + k + '-text', this.characters()[k] === ' ' ? '␣' : this.characters()[k]);
             this.renderCall(screen);
+            if (screen === 'settings') this.renderSettings();
             if (decorated) this.renderDecor(screen);
             this.ticking(!!this.call && !!this.callStarted);
             var dialing = this.pendingCall || this.call && this.call.outgoing &&
@@ -532,17 +552,28 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.text('lChip', this.chipText()); this.text('lEmojis', emojis);
             if (screen === 'landscape') this.show('lEmojis', !!emojis);
             this.text('mute-text', microphoneEnabled ? (this.muted ? T.unmute : T.mute) : T.micOff);
-            var engaged = {mute: this.muted, camera: this.camera, tracking: this.tracking};
+            var engaged = {mute: this.muted, camera: this.camera, tracking: this.tracking}, orientation = this.setting('orientation');
+            this.text('orientation-text', T.orientation[orientation]);
             ['', 'l'].forEach(function (prefix) {
                 var mine = (prefix ? 'landscape' : 'portrait') === screen;
                 if (!mine) return;
                 layout.callButtons.forEach(function (name) {
-                    var on = !!engaged[name], usable = name === 'rotate' ? ready && !!self.videoSprite : ready || name === 'hangup';
-                    self.show(prefix + name, usable && !on);
-                    if (CALL[name][3]) self.show(prefix + name + 'On', usable && on);
+                    var on = !!engaged[name], usable = ready || name === 'hangup';
+                    if (name === 'orientation') settings.ORIENTATIONS.forEach(function (mode) { self.show(prefix + name + capital(mode), usable && mode === orientation); });
+                    else {
+                        self.show(prefix + name, usable && !on);
+                        if (CALL[name][3]) self.show(prefix + name + 'On', usable && on);
+                    }
                     if (!prefix) self.show(name + '-text', usable);
                 });
             });
+        }
+        renderSettings() {
+            var self = this, background = !!this.setting('background'), orientation = this.setting('orientation');
+            this.show('background', !background); this.show('backgroundOn', background);
+            this.text('background-text', background ? T.backgroundOn : T.backgroundOff);
+            settings.ORIENTATIONS.forEach(function (mode) { self.show('videoMode' + capital(mode), mode === orientation); });
+            this.text('videoMode-text', T.video + T.orientation[orientation].toLowerCase());
         }
         renderDecor(screen) {
             var d = this.decor, page = this.page;
