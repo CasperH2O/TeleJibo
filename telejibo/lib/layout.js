@@ -44,8 +44,9 @@ var text = {
 };
 
 // Title row: name centred like the stock menus, settings in the top right. Pages show
-// only on the stock pager bar, as in the stock menus.
-var header = {title: {x: 640, y: 68, size: 60}, settings: {x: 1092, y: 56, size: 76}};
+// only on the stock pager bar, as in the stock menus. The settings button sits 58 px from
+// the top and right edges, so its circle follows the screen's rounded corner.
+var header = {title: {x: 640, y: 68, size: 60}, settings: {x: 1146, y: 58, size: 76}};
 
 // Three columns of two rows (direction A); the grid fills down each column first,
 // so the most recent conversations sit at the top left.
@@ -214,6 +215,13 @@ function key(index) {
     var k = password.keys;
     return {x: k.x + index % 10 * (k.width + k.gap), y: k.y + Math.floor(index / 10) * (k.height + k.gap), width: k.width, height: k.height};
 }
+// A round button: its circle inside the safe rectangle, rounded corners included.
+function safeCircle(x, y, size) {
+    var m = screen.margin, r = screen.corner, half = size / 2, cx = x + half, cy = y + half;
+    var nx = Math.min(Math.max(cx, m + r), screen.width - m - r), ny = Math.min(Math.max(cy, m + r), screen.height - m - r);
+    return cx - half >= m && cy - half >= m && cx + half <= screen.width - m && cy + half <= screen.height - m &&
+        Math.sqrt((cx - nx) * (cx - nx) + (cy - ny) * (cy - ny)) + half <= r;
+}
 // Inside the margins and clear of the rounded corners of the safe rectangle.
 function safe(rect) {
     var m = screen.margin, r = screen.corner, right = screen.width - m, bottom = screen.height - m;
@@ -230,5 +238,5 @@ module.exports = {
     settings: settings, password: password, waiting: waiting, ACTION_BUTTON: ACTION_BUTTON,
     actionScale: actionScale, slot: slot, pages: pages, pageOf: pageOf, counter: counter, neighbours: neighbours, pager: pager,
     drag: drag, release: release, spring: spring, fit: fit, initials: initials, tone: tone, status: status, duration: duration,
-    video: video, rowButton: rowButton, key: key, safe: safe
+    video: video, rowButton: rowButton, key: key, safe: safe, safeCircle: safeCircle
 };
