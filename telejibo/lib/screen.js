@@ -305,10 +305,6 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
                     s.orientation.x, s.orientation.y, s.button, function () { self.cycleOrientation(); });
             });
             caption('settings', 'videoMode-text', '', s.orientation.x + s.button / 2, captionY(s.orientation), s.caption.size, s.caption.width);
-            var toggleSelf = function () { self.choose('selfView', !self.setting('selfView')); };
-            action('settings', 'selfView', OWN_ICON('video'), B.neutral, s.selfView.x, s.selfView.y, s.button, toggleSelf);
-            action('settings', 'selfViewOn', OWN_ICON('video'), B.accent, s.selfView.x, s.selfView.y, s.button, toggleSelf);
-            caption('settings', 'selfView-text', T.selfViewOn, s.selfView.x + s.button / 2, captionY(s.selfView), s.caption.size, s.caption.width);
             action('settings', 'signOut', STOCK_ICON('shutdown'), B.decline, s.signOut.x, s.signOut.y, s.button,
                 function () { controller.send({method: 'logout'}); self.password = ''; self.qr = null; });
             caption('settings', 'signOut-text', T.signOut, s.signOut.x + s.button / 2, captionY(s.signOut), s.caption.size, s.caption.width);
@@ -390,7 +386,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             });
 
             // The own-camera picture is painted in the video layer; these are its tap areas.
-            var v = L.selfView, hide = function () { if (self.selfSprite) self.choose('selfView', false); };
+            var v = L.selfView, hide = function () { if (self.selfSprite) self.hideSelf(); };
             area('portrait', 'selfTile', v.portrait.x, v.portrait.y, v.width, v.height, hide);
             area('landscape', 'lSelfTile', v.landscape.x, v.landscape.y, v.width, v.height, hide);
 
@@ -492,8 +488,12 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (this.leaving || this.closing) return;
             if (typeof controller.setSetting === 'function') controller.setSetting(name, value);
             if (name === 'orientation' && this.videoCanvas) { this.videoSize = ''; this.videoFrame(this.videoCanvas); }
-            if (name === 'selfView' && !value) this.disposeSelf();
             this.render();
+        }
+        // A tap on the self view hides it for the rest of this call; the next call shows it again.
+        hideSelf() {
+            if (typeof controller.setSelfView === 'function') controller.setSelfView(false);
+            this.disposeSelf(); this.render();
         }
         // Automatic, then landscape, then portrait.
         cycleOrientation() { this.choose('orientation', settings.nextOrientation(this.setting('orientation'))); }
@@ -602,7 +602,9 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             if (screen !== 'contacts' && (this.dragging || this.animation)) { this.dragging = null; this.animation = null; this.slide = {x: 0, velocity: 0, target: 0}; }
             this.panning(screen === 'contacts');
             // On the contacts screen the line under the pager tells of a call that rang unseen.
-            var note = screen === 'contacts' ? (this.missed ? T.missedFrom + (this.missed.name || '').trim() : this.notice) : this.message;
+            // On the settings screen it says what the background choice does, unless there is news.
+            var note = screen === 'contacts' ? (this.missed ? T.missedFrom + (this.missed.name || '').trim() : this.notice) :
+                screen === 'settings' ? this.message || (this.setting('background') ? T.backgroundHintOn : T.backgroundHintOff) : this.message;
             this.text('message', note);
             this.show('message', !!note);
             var message = this.component('message');
@@ -683,10 +685,7 @@ module.exports = function createScreen(jibo, BeSkill, controller, qrFactory) {
             this.show('background', !background); this.show('backgroundOn', background);
             this.text('background-text', background ? T.backgroundOn : T.backgroundOff);
             settings.ORIENTATIONS.forEach(function (mode) { self.show('videoMode' + capital(mode), mode === orientation); });
-            this.text('videoMode-text', T.video + T.orientation[orientation].toLowerCase());
-            var selfView = !!this.setting('selfView');
-            this.show('selfView', !selfView); this.show('selfViewOn', selfView);
-            this.text('selfView-text', selfView ? T.selfViewOn : T.selfViewOff);
+            this.text('videoMode-text', T.orientationLabel + T.orientation[orientation].toLowerCase());
         }
         renderDecor(screen) {
             var d = this.decor, page = this.page;

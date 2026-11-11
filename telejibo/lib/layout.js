@@ -33,9 +33,11 @@ var text = {
     linkTitle: 'Link Telegram', steps: ['Open Telegram on your phone', 'Settings, Devices, Link Desktop Device', 'Scan the code'],
     waitingScan: 'Waiting for scan…',
     settings: 'Settings', signOut: 'Sign out', back: 'Back',
-    backgroundOn: 'Background: on', backgroundOff: 'Background: off', selfViewOn: 'Self view: on', selfViewOff: 'Self view: off',
+    // Background calls: the caption names the effect, the line under the buttons explains it.
+    backgroundOn: 'Ring when closed: on', backgroundOff: 'Ring when closed: off',
+    backgroundHintOn: 'Calls ring even when TeleJibo is closed', backgroundHintOff: 'Calls only ring while TeleJibo is open',
     // The call layout: follow the incoming video, or always one shape.
-    orientation: {auto: 'Automatic', landscape: 'Landscape', portrait: 'Portrait'}, video: 'Video: ',
+    orientation: {auto: 'Automatic', landscape: 'Landscape', portrait: 'Portrait'}, orientationLabel: 'Orientation: ',
     passwordTitle: 'Two-step password', passwordHint: 'Password', shift: 'Shift', symbols: '#?!', remove: 'Delete', submit: 'Sign in',
     setupMissing: 'TeleJibo is missing its sign-in setup', retry: 'Please try again', mediaStarting: 'Starting camera and microphone…', videoStarting: 'Starting camera…',
     mediaUnavailable: 'Call media unavailable', mediaStopped: 'Call media stopped', stopped: 'Connection stopped'
@@ -62,7 +64,8 @@ contacts.pageWidth = contacts.columns * (contacts.width + contacts.columnGap);
 // Status line (centre y per screen).
 // On the contacts screen the second card row ends at y 642 and the pager track runs 670-680,
 // so the line sits under the pager.
-var message = {width: 900, size: 32, y: {landscape: 515, incoming: 395, portrait: 650, contacts: 696, other: 640}};
+// On the settings screen it explains the background choice, under the second row's captions.
+var message = {width: 900, size: 32, y: {landscape: 515, incoming: 395, portrait: 650, contacts: 696, settings: 646, other: 640}};
 
 var incoming = {
     avatar: {x: 640, y: 156, size: 200, initials: 90}, name: {x: 640, y: 311, width: 1000, size: 64},
@@ -98,10 +101,11 @@ var qr = {
     plate: {x: 808, y: 170, size: 352, radius: 20, padding: 24},
     waiting: {x: 112, y: 612, size: 36}
 };
-// Two rows of two: the choices above, sign out and back below. Captions sit `gap` under their button.
+// Two rows of two: the choices above, sign out and back below. Captions sit `gap` under their
+// button; the columns are 480 px apart so "Orientation: landscape" fits on one line.
 var settings = {title: {x: 640, y: 68, size: 60}, button: 150,
-    background: {x: 245, y: 128}, orientation: {x: 565, y: 128}, selfView: {x: 885, y: 128}, signOut: {x: 405, y: 388}, back: {x: 725, y: 388},
-    caption: {gap: 40, size: 36, width: 310}};
+    background: {x: 325, y: 128}, orientation: {x: 805, y: 128}, signOut: {x: 325, y: 388}, back: {x: 805, y: 388},
+    caption: {gap: 40, size: 36, width: 440}};
 var password = {
     title: {x: 112, y: 61, size: 54}, field: {x: 112, y: 120, width: 1056, height: 80, size: 36},
     keys: {x: 115, y: 216, width: 96, height: 68, gap: 10, size: 34},

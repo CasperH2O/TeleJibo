@@ -25,19 +25,18 @@ TeleJibo 0.2 needs BEam 3.1.9 or newer.
    your face), **End**, and a button for the picture's shape: **Automatic**
    follows the caller's video, **Landscape** and **Portrait** keep one layout.
    Camera and head tracking start on when the call connects. A small picture
-   of your own camera sits in a corner; tap it to hide it.
+   of your own camera sits in a corner; tap it to hide it for that call.
 5. **Settings** (top right):
-   - **Background** (off by default): keep Telegram connected while TeleJibo is
-     closed, so an incoming call opens TeleJibo and rings.
-   - **Video**: the same Automatic / Landscape / Portrait choice.
-   - **Self view**: the small picture of your own camera.
+   - **Ring when closed** (off by default): keep Telegram connected while
+     TeleJibo is closed, so an incoming call opens TeleJibo and rings.
+   - **Orientation**: the same Automatic / Landscape / Portrait choice.
    - **Sign out** signs the robot out of Telegram.
 
 By voice (not yet tested on a robot): "Hey Jibo, video call Anna" finds the
 contact and asks **Video call?** before dialling; say yes or no, or tap. While
 a call rings you can say "answer" or "decline".
 
-With **Background** off, calls only come in while TeleJibo is open. With it
+With **Ring when closed** off, calls only come in while TeleJibo is open. With it
 on, Jibo rings whenever BEam lets TeleJibo take the screen; a call that could
 not be shown (an alarm was going off, say) is noted on the contacts screen.
 During a call TeleJibo asks Jibo not to switch to another skill.

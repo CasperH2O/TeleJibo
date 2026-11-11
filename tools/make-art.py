@@ -84,11 +84,30 @@ def cog():
     return [(gear(12, 12, 7.2, 10.6, 3.3, 8, 3.4), WHITE)]
 
 
-def rotate_arrow():
-    def arc(px, py):
-        dx, dy = px - 12, py - 12
-        return 6.2 <= math.hypot(dx, dy) <= 8.8 and not (dx > 0 and dy < -2)
-    return [(arc, WHITE), (convex([(15, 3), (22, 3), (22, 10)]), WHITE)]
+# Automatic orientation: the portrait screen of the fixed choices, smaller, with two
+# arrows turning clockwise around it (the usual auto-rotate sign).
+def auto_rotate():
+    inner, outer, head, reach = 8.4, 10.3, 2.5, 3.4
+    middle = (inner + outer) / 2
+
+    def ring(start, end):
+        def inside(px, py):
+            dx, dy = px - 12, py - 12
+            return inner <= math.hypot(dx, dy) <= outer and start <= math.degrees(math.atan2(dy, dx)) <= end
+        return inside
+
+    def point(radius, degrees):
+        a = math.radians(degrees)
+        return (12 + radius * math.cos(a), 12 + radius * math.sin(a))
+
+    def arrow(start, end):
+        tip = point(middle, end + math.degrees(reach / middle))
+        cap = point(middle, start)
+        return [(ring(start, end), WHITE), (disc(cap[0], cap[1], (outer - inner) / 2), WHITE),
+                (convex([point(middle - head, end), point(middle + head, end), tip]), WHITE)]
+
+    screen = [(outline(8.2, 5.4, 7.6, 13.2, 1.8, 1.9), WHITE), (rounded_rect(10.2, 11.1, 3.6, 1.8, 0.9), WHITE)]
+    return screen + arrow(-160, -52) + arrow(20, 128)
 
 
 def outline(x, y, width, height, radius, stroke):
@@ -220,7 +239,7 @@ def main():
     if wanted('settings'):
         write('telejibo/resources/icons/settings.png', 265, 265, icon(265, 265, cog(), 128, (132, 132), 60))
     if wanted('rotate'):
-        write('telejibo/resources/icons/rotate.png', 265, 265, icon(265, 265, rotate_arrow(), 138, (132.5, 132.5), 58))
+        write('telejibo/resources/icons/rotate.png', 265, 265, icon(265, 265, auto_rotate(), 138, (132.5, 132.5), 58))
     for name, glyph_of in (('landscape', lambda: frame(True)), ('portrait', lambda: frame(False)), ('bell', bell)):
         if wanted(name):
             write('telejibo/resources/icons/%s.png' % name, 265, 265, icon(265, 265, glyph_of(), 138, (132.5, 132.5), 58))

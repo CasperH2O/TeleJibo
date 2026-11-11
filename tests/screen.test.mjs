@@ -22,8 +22,9 @@ function fixture() {
         remove(alias) { ++tones.find(t => t.alias === alias).removed; }
     }};
     const saved = [];
-    const controller = {microphoneEnabled: false, releases: 0, settings: {background: false, orientation: 'auto', selfView: true, diagnostics: false},
+    const controller = {microphoneEnabled: false, releases: 0, settings: {background: false, orientation: 'auto', diagnostics: false},
         setSetting(name, value) { saved.push([name, value]); this.settings = {...this.settings, [name]: value}; },
+        setSelfView(on) { saved.push(['selfView', on]); },
         prepareMedia: () => ready.promise,
         releaseMedia() { ++this.releases; return Promise.resolve(); },
         send(v) { sent.push(v); return true; },
@@ -248,20 +249,24 @@ test('settings show the saved choices and change them', () => {
     f.screen.state = 'settings'; f.screen.render();
     assert.equal(f.screen.screen, 'settings');
     assert.equal(visible('background'), true); assert.equal(visible('backgroundOn'), false);
-    assert.equal(f.components.get('background-text').text, 'Background: off');
+    assert.equal(f.components.get('background-text').text, 'Ring when closed: off');
+    assert.equal(f.components.get('message').text, 'Calls only ring while TeleJibo is open');
+    assert.equal(visible('message'), true);
     assert.equal(visible('videoModeAuto'), true); assert.equal(visible('videoModeLandscape'), false);
-    assert.equal(f.components.get('videoMode-text').text, 'Video: automatic');
+    assert.equal(f.components.get('videoMode-text').text, 'Orientation: automatic');
+    assert.equal(f.components.get('selfView'), undefined, 'the self view is not a setting');
     f.screen.choose('background', !f.screen.setting('background'));
     assert.equal(f.controller.settings.background, true);
     assert.equal(visible('background'), false); assert.equal(visible('backgroundOn'), true);
-    assert.equal(f.components.get('background-text').text, 'Background: on');
+    assert.equal(f.components.get('background-text').text, 'Ring when closed: on');
+    assert.equal(f.components.get('message').text, 'Calls ring even when TeleJibo is closed');
     f.screen.cycleOrientation();
     assert.equal(visible('videoModeLandscape'), true); assert.equal(visible('videoModeAuto'), false);
-    assert.equal(f.components.get('videoMode-text').text, 'Video: landscape');
+    assert.equal(f.components.get('videoMode-text').text, 'Orientation: landscape');
     assert.deepEqual(f.saved, [['background', true], ['orientation', 'landscape']]);
 });
 
-test('the self view shows in a corner during a call, a tap hides it and saves that, and it goes with the call', () => {
+test('the self view shows in a corner during a call, a tap hides it for that call, and it goes with the call', () => {
     const before = global.PIXI;
     try {
         const f = videoFixture(), added = [];
@@ -270,9 +275,10 @@ test('the self view shows in a corner during a call, a tap hides it and saves th
         f.screen.selfFrame(canvas);
         assert.ok(f.screen.selfSprite); assert.equal(added.length, 1);
         f.screen.selfFrame(canvas); assert.equal(added.length, 1, 'one sprite, updated in place');
-        f.screen.choose('selfView', false);
+        f.screen.hideSelf();
         assert.equal(f.screen.selfSprite, null);
-        assert.deepEqual(f.saved, [['selfView', false]]);
+        assert.deepEqual(f.saved, [['selfView', false]], 'the media stop the picture; nothing is saved to settings');
+        assert.equal(f.controller.settings.selfView, undefined);
         f.screen.selfFrame(canvas); assert.ok(f.screen.selfSprite);
         f.screen.selfFrame(null); assert.equal(f.screen.selfSprite, null);
         f.screen.selfFrame(canvas);

@@ -73,7 +73,7 @@ function screenFixture(pages, {staged = false, failing = false} = {}) {
     const s = speech(), sent = [];
     const jibo = Object.assign(s.jibo, {face: {views: {ActionData: {CALLBACK: 'callback'}}}, sound: {add: () => ({play() {}, stop() {}}), remove() {}}});
     const log = {info() {}, debug() {}, warn() {}, error() {}};
-    const controller = {settings: {background: false, orientation: 'auto', selfView: true, diagnostics: false}, setSetting() {},
+    const controller = {settings: {background: false, orientation: 'auto', diagnostics: false}, setSetting() {},
         prepareMedia: () => Promise.resolve(), releaseMedia: () => Promise.resolve(),
         send(value) {
             sent.push(value);

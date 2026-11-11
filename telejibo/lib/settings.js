@@ -9,9 +9,10 @@ var ORIENTATIONS = ['auto', 'landscape', 'portrait'];
 var DEFAULTS = {
     background: false,      // keep Telegram connected while the skill is closed, to ring for calls
     orientation: 'auto',    // call layout: follow the incoming video, or always one shape
-    selfView: true,         // show the own-camera thumbnail during a call
     diagnostics: false      // log load figures during calls (set by hand; there is no button)
 };
+// The self view is no longer a setting: it shows in every call and a tap hides it for that
+// call. A `selfView` key in an older settings.json is ignored and dropped on the next save.
 
 // Known keys with valid values only; everything else falls back to its default.
 function clean(values) {
